@@ -1,0 +1,249 @@
+openapi: 3.1.0
+info:
+  title: ad-placement
+  version: 1.0.0
+  description: |
+    Advertiser + ad CRUD and ad reads for display. Route `/api/ad-placement`, **JWT required at the
+    gateway** (missing/invalid token → 401 from Envoy, never reaches the service). The service reads
+    the verified claims from headers set by the gateway: X-Auth-Sub, X-Auth-Role
+    (`viewer`|`advertiser`), X-Auth-Advertiser-Id (decimal string, "" for viewers).
+
+    Authorization (service): any role may use `GET /ads`, `GET /ads/{ad_id}`, `POST /advertisers`.
+    Everything under `/advertisers/{advertiser_id}` requires role `advertiser` and
+    X-Auth-Advertiser-Id == advertiser_id, else 403. Missing auth headers → 401 (defence in depth).
+    Stores in the `postgres` instance (schema: contracts/db/postgres.sql).
+servers:
+  - url: /api/ad-placement
+security:
+  - bearer: []
+paths:
+  /ads:
+    get:
+      operationId: listActiveAds
+      summary: Active ads for display (keyset pagination by id)
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 20 }
+        - name: after_id
+          in: query
+          description: Return ads with id > after_id (use `next_after_id` from the previous page)
+          schema: { type: integer, minimum: 0 }
+      responses:
+        "200":
+          description: Page of active ads, ordered by id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdPage"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /ads/{ad_id}:
+    get:
+      operationId: getAd
+      summary: One active ad
+      parameters:
+        - $ref: "#/components/parameters/AdId"
+      responses:
+        "200":
+          description: The ad
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ad" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /advertisers:
+    post:
+      operationId: createAdvertiser
+      summary: Sign up a new advertiser (any valid token)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AdvertiserCreate" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Advertiser" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /advertisers/{advertiser_id}:
+    get:
+      operationId: getAdvertiser
+      parameters:
+        - $ref: "#/components/parameters/AdvertiserId"
+      responses:
+        "200":
+          description: The advertiser
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Advertiser" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /advertisers/{advertiser_id}/ads:
+    get:
+      operationId: listAdvertiserAds
+      summary: All ads of the advertiser (active and inactive), ordered by id
+      parameters:
+        - $ref: "#/components/parameters/AdvertiserId"
+        - name: include_inactive
+          in: query
+          schema: { type: boolean, default: true }
+      responses:
+        "200":
+          description: Ads
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Ad" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: createAd
+      parameters:
+        - $ref: "#/components/parameters/AdvertiserId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AdCreate" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ad" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /advertisers/{advertiser_id}/ads/{ad_id}:
+    put:
+      operationId: updateAd
+      summary: Replace the editable fields of an ad (also re-activates with active=true)
+      parameters:
+        - $ref: "#/components/parameters/AdvertiserId"
+        - $ref: "#/components/parameters/AdId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AdUpdate" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ad" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: deactivateAd
+      summary: Soft delete (active = false). Idempotent.
+      parameters:
+        - $ref: "#/components/parameters/AdvertiserId"
+        - $ref: "#/components/parameters/AdId"
+      responses:
+        "204":
+          description: Deactivated
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    AdvertiserId:
+      name: advertiser_id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+    AdId:
+      name: ad_id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+  responses:
+    Unauthorized:
+      description: No verified identity (normally answered by the gateway)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Forbidden:
+      description: Authenticated but not the owner / wrong role
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: No such advertiser/ad (or ad not owned by this advertiser, or inactive for /ads/{ad_id})
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    Error:
+      type: object
+      required: [detail]
+      properties:
+        detail: { type: string }
+    AdvertiserCreate:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+    Advertiser:
+      type: object
+      required: [id, name, created_at]
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        created_at: { type: string, format: date-time }
+    AdCreate:
+      type: object
+      required: [content, redirect_url]
+      properties:
+        content: { type: string, minLength: 1, maxLength: 2000 }
+        img_url: { type: [string, "null"], format: uri }
+        redirect_url: { type: string, format: uri, description: "absolute http(s) URL" }
+    AdUpdate:
+      type: object
+      required: [content, redirect_url, active]
+      properties:
+        content: { type: string, minLength: 1, maxLength: 2000 }
+        img_url: { type: [string, "null"], format: uri }
+        redirect_url: { type: string, format: uri }
+        active: { type: boolean }
+    Ad:
+      type: object
+      required: [id, advertiser_id, content, img_url, redirect_url, active, click_url, created_at, updated_at]
+      properties:
+        id: { type: integer }
+        advertiser_id: { type: integer }
+        content: { type: string }
+        img_url: { type: [string, "null"] }
+        redirect_url: { type: string }
+        active: { type: boolean }
+        click_url:
+          type: string
+          description: "Relative click link without the user: `/api/click-receiver/click/{id}`. Clients append `?user_id=<id>`."
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    AdPage:
+      type: object
+      required: [items, next_after_id]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Ad" }
+        next_after_id:
+          type: [integer, "null"]
+          description: null when this is the last page

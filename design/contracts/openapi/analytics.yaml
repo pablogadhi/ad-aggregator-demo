@@ -1,0 +1,160 @@
+openapi: 3.1.0
+info:
+  title: analytics
+  version: 1.0.0
+  description: |
+    Click metrics for advertisers. Route `/api/analytics`, **JWT required at the gateway**.
+    Authorization (service): role `advertiser` and X-Auth-Advertiser-Id == advertiser_id, else 403;
+    missing auth headers → 401. Reads `click_counts` (contracts/db/analytics-db.sql) through
+    ANALYTICS_DB_READ_URL, falling back to ANALYTICS_DB_URL. Latency target: p95 < 500 ms.
+
+    Time semantics (UTC buckets): `from` is truncated DOWN to its bucket start; `to` is exclusive and
+    rounded UP to the next bucket boundary (unless already on one), so with `to` = now the current,
+    still-filling bucket is included. The series is zero-filled over the effective [from, to).
+    Defaults: to = now, from = to - 1h, granularity = minute. from >= to or more than 1440
+    buckets → 400. Timestamps without an offset are rejected (422).
+servers:
+  - url: /api/analytics
+security:
+  - bearer: []
+paths:
+  /advertisers/{advertiser_id}/clicks:
+    get:
+      operationId: getAdvertiserClicks
+      summary: Clicks over time for all ads of the advertiser, plus per-ad totals
+      parameters:
+        - $ref: "#/components/parameters/AdvertiserId"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Granularity"
+      responses:
+        "200":
+          description: Series
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdvertiserClicks" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /advertisers/{advertiser_id}/ads/{ad_id}/clicks:
+    get:
+      operationId: getAdClicks
+      summary: Clicks over time for one ad of the advertiser
+      description: An ad with no rows (or one of another advertiser) returns a zero-filled series, not 404 — analytics does not know the ads catalogue.
+      parameters:
+        - $ref: "#/components/parameters/AdvertiserId"
+        - name: ad_id
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1 }
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Granularity"
+      responses:
+        "200":
+          description: Series
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdClicks" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    AdvertiserId:
+      name: advertiser_id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+    From:
+      name: from
+      in: query
+      description: RFC 3339 timestamp (default to - 1h)
+      schema: { type: string, format: date-time }
+    To:
+      name: to
+      in: query
+      description: RFC 3339 timestamp, exclusive (default now)
+      schema: { type: string, format: date-time }
+    Granularity:
+      name: granularity
+      in: query
+      schema: { type: string, enum: [minute, hour, day], default: minute }
+  responses:
+    BadRequest:
+      description: from >= to, or more than 1440 buckets
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthorized:
+      description: No verified identity (normally answered by the gateway)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Forbidden:
+      description: Not this advertiser / not an advertiser token
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    Error:
+      type: object
+      required: [detail]
+      properties:
+        detail: { type: string }
+    Point:
+      type: object
+      required: [start, clicks]
+      properties:
+        start: { type: string, format: date-time, description: "Bucket start (UTC)" }
+        clicks: { type: integer, minimum: 0 }
+    Freshness:
+      type: object
+      required: [last_updated_at]
+      properties:
+        last_updated_at:
+          type: [string, "null"]
+          format: date-time
+          description: max(updated_at) of the rows in range; null when there are none
+    AdTotal:
+      type: object
+      required: [ad_id, clicks]
+      properties:
+        ad_id: { type: integer }
+        clicks: { type: integer, minimum: 0 }
+    AdClicks:
+      type: object
+      required: [advertiser_id, ad_id, granularity, from, to, total, points, freshness]
+      properties:
+        advertiser_id: { type: integer }
+        ad_id: { type: integer }
+        granularity: { type: string, enum: [minute, hour, day] }
+        from: { type: string, format: date-time, description: "Effective (truncated) start" }
+        to: { type: string, format: date-time, description: "Effective (rounded up) exclusive end" }
+        total: { type: integer, minimum: 0 }
+        points:
+          type: array
+          items: { $ref: "#/components/schemas/Point" }
+        freshness: { $ref: "#/components/schemas/Freshness" }
+    AdvertiserClicks:
+      type: object
+      required: [advertiser_id, granularity, from, to, total, points, by_ad, freshness]
+      properties:
+        advertiser_id: { type: integer }
+        granularity: { type: string, enum: [minute, hour, day] }
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+        total: { type: integer, minimum: 0 }
+        points:
+          type: array
+          items: { $ref: "#/components/schemas/Point" }
+        by_ad:
+          type: array
+          description: Per-ad totals over the range, clicks descending, only ads with clicks > 0
+          items: { $ref: "#/components/schemas/AdTotal" }
+        freshness: { $ref: "#/components/schemas/Freshness" }

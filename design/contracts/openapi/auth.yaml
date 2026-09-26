@@ -1,0 +1,99 @@
+openapi: 3.1.0
+info:
+  title: auth
+  version: 1.0.0
+  description: |
+    Demo token issuer (no passwords). Public route `/api/auth`, **no JWT required** at the gateway.
+    Signs RS256 JWTs with the key from connection `jwt` (JWT_PRIVATE_KEY_PEM, JWT_KID, JWT_ISSUER,
+    JWT_AUDIENCE). Envoy Gateway verifies these tokens on the ad-placement and analytics routes and
+    forwards claims as headers: sub → X-Auth-Sub, role → X-Auth-Role, advertiser_id → X-Auth-Advertiser-Id.
+servers:
+  - url: /api/auth
+paths:
+  /token:
+    post:
+      operationId: issueToken
+      summary: Issue a 1 h token for a viewer (end user) or an advertiser
+      description: |
+        Claims: `sub` (viewer: the user_id; advertiser: `advertiser:<id>`), `role`,
+        `advertiser_id` (decimal string; `""` for viewers), `iss`, `aud`, `iat`, `exp`; header `kid`.
+        Does not check that the advertiser exists (demo login).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TokenRequest"
+      responses:
+        "200":
+          description: Signed token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenResponse"
+        "422":
+          description: "Invalid request (e.g. role=advertiser without advertiser_id, role=viewer without user_id)"
+  /.well-known/jwks.json:
+    get:
+      operationId: getJwks
+      summary: Public key set for verifying tokens
+      responses:
+        "200":
+          description: JWKS
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Jwks"
+components:
+  schemas:
+    TokenRequest:
+      type: object
+      required: [role]
+      properties:
+        role:
+          type: string
+          enum: [viewer, advertiser]
+        user_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Required when role = viewer
+        advertiser_id:
+          type: integer
+          minimum: 1
+          description: Required when role = advertiser
+    TokenResponse:
+      type: object
+      required: [access_token, token_type, expires_in, role]
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+          enum: [Bearer]
+        expires_in:
+          type: integer
+          description: Seconds (3600)
+        role:
+          type: string
+          enum: [viewer, advertiser]
+        advertiser_id:
+          type: [integer, "null"]
+        user_id:
+          type: [string, "null"]
+    Jwks:
+      type: object
+      required: [keys]
+      properties:
+        keys:
+          type: array
+          items:
+            type: object
+            required: [kty, kid, use, alg, n, e]
+            properties:
+              kty: { type: string, enum: [RSA] }
+              kid: { type: string }
+              use: { type: string, enum: [sig] }
+              alg: { type: string, enum: [RS256] }
+              n: { type: string }
+              e: { type: string }

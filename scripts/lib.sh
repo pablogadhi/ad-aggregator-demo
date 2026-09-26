@@ -60,5 +60,5 @@ run_once() {
   [ "$phase" = Succeeded ]
 }
 
-# stack <query> — reads stack.yaml (components | profile <name> | services | client)
+# stack <query> — reads stack.yaml (components | entries [name] | profile <name> | services | client)
 stack() { python3 "$SDL_ROOT/scripts/stack.py" "$@"; }

@@ -17,11 +17,12 @@ if [ "${SKIP_PLATFORM:-0}" != "1" ]; then
   "$SDL_ROOT/infra/platform/install.sh"
 fi
 
-for c in $(stack components); do
-  profile=$(stack profile "$c")
-  log "component: $c ($profile)"
-  "$SDL_ROOT/infra/components/$c/install.sh" "$profile"
-done
+# each entry: <component> <profile> <instance> (instance defaults to the component name)
+while read -r c profile instance; do
+  [ -n "$c" ] || continue
+  log "component: $instance ($c, $profile)"
+  "$SDL_ROOT/infra/components/$c/install.sh" "$profile" "$instance" </dev/null
+done < <(stack entries)
 
 # design-specific infra (topics, buckets, extra DBs...) — owned by the design, not the components
 if [ -f "$SDL_ROOT/infra/design/install.sh" ]; then
