@@ -1,0 +1,10 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: redis
+  namespace: data
+spec:
+  selector:
+    matchLabels: { app.kubernetes.io/name: redis }
+  podMetricsEndpoints:
+    - port: metrics

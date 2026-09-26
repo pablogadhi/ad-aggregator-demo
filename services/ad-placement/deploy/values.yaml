@@ -1,0 +1,15 @@
+# Overrides for infra/charts/app (see its values.yaml for every option)
+replicas: 2                      # spread across zones by the chart (+ PDB)
+connections: [postgres]          # Secret apps/postgres-conn -> POSTGRES_URL (primary), POSTGRES_READ_URL (replicas), ...
+env:
+  CLICK_URL_PREFIX: /api/click-receiver/click
+  POSTGRES_POOL_MAX: "10"
+route:
+  enabled: true
+  pathPrefix: /api/ad-placement  # JWT verified by the gateway (SecurityPolicy in infra/design/)
+resources:
+  requests: { cpu: 100m, memory: 160Mi }
+  limits: { memory: 320Mi }
+migrations:
+  enabled: true                  # owns design/contracts/db/postgres.sql (advisory-locked, safe on every replica)
+  command: ["python", "-m", "sdl_common.migrate", "ad_placement.migrations"]

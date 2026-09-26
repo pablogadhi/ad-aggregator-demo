@@ -1,0 +1,31 @@
+# -*- mode: Python -*-
+# click-aggregator (Flink SQL job) — included by the root Tiltfile (paths here are relative to this dir).
+# Builds the job image (runs the Maven unit tests inside the build), pushes it to the local registry
+# like the services, and applies the FlinkDeployment; the Flink operator does the rest.
+
+docker_build(
+    'click-aggregator',
+    '.',
+    dockerfile='Dockerfile',
+    ignore=['job/target', 'README.md', 'deploy'],
+    build_args={'SKIP_TESTS': os.getenv('FLINK_SKIP_TESTS', 'false')},
+)
+
+# Tilt rewrites spec.image of the FlinkDeployment to the pushed tag; a new image triggers a
+# last-state upgrade (resume from the latest checkpoint).
+k8s_kind('FlinkDeployment', image_json_path='{.spec.image}', pod_readiness='ignore')
+k8s_yaml('deploy/flinkdeployment.yaml')
+k8s_resource(
+    'click-aggregator',
+    labels=['pipelines'],
+    extra_pod_selectors=[{'app': 'click-aggregator'}],   # JM + TM pods created by the operator
+)
+
+# Healthy = the operator reports the job RUNNING (pods alone don't say the job was submitted).
+local_resource(
+    'click-aggregator-running',
+    cmd='kubectl --context kind-sdl -n apps wait flinkdeployment/click-aggregator '
+        + '--for=jsonpath=\'{.status.jobStatus.state}\'=RUNNING --timeout=600s',
+    resource_deps=['click-aggregator'],
+    labels=['pipelines'],
+)

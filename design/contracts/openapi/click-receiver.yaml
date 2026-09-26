@@ -6,7 +6,7 @@ info:
     The hot path. Route `/api/click-receiver`, **no JWT** (end users follow plain links).
     Both operations share one code path (spec §5.1):
       1. ad lookup (in-process cache 60 s → POSTGRES_READ_URL → POSTGRES_URL on a miss); unknown or inactive → 404
-      2. dedup `SET click:dedup:{ad_id}:{user_id} <click_id> NX EX 600` (50 ms timeout; Redis error → fail open)
+      2. dedup `SET click:dedup:<ad_id>:<user_id> <click_id> NX EX 600` (50 ms timeout; Redis error → fail open)
       3. accepted → produce ClickEvent (contracts/events/clicks.schema.json) to topic `clicks`, key = `ad_id`
          (or `ad_id#salt` when the ad is hot, spec §5.1.1), acks=all + idempotence, and **wait for the ack**
          before answering; accepted clicks feed the batched hot-ad counters in Redis

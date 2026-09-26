@@ -10,9 +10,9 @@ back into the template (`scripts/harvest-component.sh`) so the next design reuse
 
 ```
 infra/components/<name>/
-├── install.sh        # usage: install.sh <profile>   — idempotent; installs operator + instance + conn secret
-├── uninstall.sh      # removes the instance (and its data); operators may stay
-├── smoke.sh          # proves real behaviour; exit non-zero on failure
+├── install.sh        # usage: install.sh <profile> [instance] — idempotent; installs operator + instance + conn secret
+├── uninstall.sh      # usage: uninstall.sh [instance] — removes the instance (and its data); operators may stay
+├── smoke.sh          # usage: smoke.sh [instance] — proves real behaviour; exit non-zero on failure
 ├── README.md         # what it is, profiles, connection contract, experiments worth running
 ├── profiles/
 │   ├── small/        # kustomize overlay (or small.yaml helm values) — minimum footprint
@@ -40,6 +40,28 @@ Name: lower-kebab, the technology (`kafka`, `redis`, `elasticsearch`, `flink`, `
 7. **UI (optional):** expose tool UIs host-based through the gateway, e.g. `kafka-ui.localhost` —
    HTTPRoute with `parentRefs: [{name: sdl, namespace: envoy-gateway-system}]`.
 
+## Instances (installing a component more than once)
+
+A `stack.yaml` entry may set `instance:` (default = the component name), e.g. two independent
+Postgres clusters:
+
+```yaml
+components:
+  - { name: postgres, profile: ha }                          # instance "postgres" -> postgres-conn
+  - { name: postgres, instance: analytics-db, profile: ha }  # -> analytics-db-conn
+```
+
+`make up` calls `install.sh <profile> <instance>`, `make smoke` calls `smoke.sh <instance>` (`make smoke
+C=<instance>` for one). The instance is always passed, so every component receives the 2nd argument:
+
+- A component that **supports** instances uses it to name its resources (CR / StatefulSet / Services /
+  PodMonitor = `<instance>`, hosts `<instance>-….data.svc.cluster.local`) and publishes
+  **`apps/<instance>-conn`** with the same keys as the default instance. Services then list
+  `connections: [<instance>]` and get env vars prefixed `<INSTANCE>_` (dashes → underscores:
+  `analytics-db` → `ANALYTICS_DB_URL`). The default instance must behave exactly as before.
+- A component that **doesn't** support instances may ignore the argument, or (better) fail fast if
+  it isn't the component name. Say which in the README. `postgres` is the reference for instances.
+
 ## The connection contract (most important)
 
 Every component publishes **one Secret named `<name>-conn` in namespace `apps`**, labelled
@@ -48,13 +70,13 @@ Every component publishes **one Secret named `<name>-conn` in namespace `apps`**
 
 | Component     | Secret               | Keys (→ env)                                                                    |
 | ------------- | -------------------- | ------------------------------------------------------------------------------- |
-| postgres      | `postgres-conn`      | `HOST READ_HOST PORT USER PASSWORD DATABASE URL READ_URL` → `POSTGRES_URL`, …   |
+| postgres      | `postgres-conn`      | `HOST READ_HOST PORT USER PASSWORD DATABASE URL READ_URL JDBC_URL` → `POSTGRES_URL`, … (`<instance>-conn` per instance) |
 | kafka         | `kafka-conn`         | `BOOTSTRAP_SERVERS` (+ `SECURITY_PROTOCOL` if not PLAINTEXT)                    |
 | redis         | `redis-conn`         | `URL` (`redis://…`), `MODE` (`standalone`/`cluster`/`sentinel`), `HOST`, `PORT` |
 | elasticsearch | `elasticsearch-conn` | `URL`, `USERNAME`, `PASSWORD`                                                   |
 | cassandra     | `cassandra-conn`     | `CONTACT_POINTS`, `PORT`, `LOCAL_DC`, `USERNAME`, `PASSWORD`, `KEYSPACE`        |
 | temporal      | `temporal-conn`      | `ADDRESS` (`host:7233`), `NAMESPACE`                                            |
-| flink         | `flink-conn`         | `REST_URL` (jobs usually don't need it; pipelines deploy FlinkDeployments)      |
+| flink         | `flink-conn`         | `REST_URL` (JobManager REST of the design's FlinkDeployment; jobs don't need it) |
 | aws           | `aws-conn`           | `ENDPOINT_URL`, `REGION`, `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY` (dummy)          |
 
 Because names are fixed by convention, the architect writes contracts and services code against them

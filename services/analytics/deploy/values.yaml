@@ -1,0 +1,15 @@
+# Overrides for infra/charts/app (see its values.yaml for every option)
+replicas: 2                      # spread across zones by the chart (+ PDB)
+connections: [analytics-db]      # Secret apps/analytics-db-conn -> ANALYTICS_DB_URL (primary), ANALYTICS_DB_READ_URL (replicas), ...
+env:
+  MAX_BUCKETS: "1440"
+  ANALYTICS_DB_POOL_MAX: "10"
+route:
+  enabled: true
+  pathPrefix: /api/analytics     # JWT verified by the gateway (SecurityPolicy in infra/design/)
+resources:
+  requests: { cpu: 100m, memory: 160Mi }
+  limits: { memory: 320Mi }
+migrations:
+  enabled: true                  # owns design/contracts/db/analytics-db.sql (the Flink job only writes rows)
+  command: ["python", "-m", "sdl_common.migrate", "analytics.migrations", "ANALYTICS_DB_URL"]

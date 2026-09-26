@@ -1,0 +1,35 @@
+# Apache Flink Kubernetes Operator — watches namespace apps (pipelines deploy FlinkDeployments there
+# so the jobs can read the *-conn secrets). The job autoscaler is built into the operator; a
+# FlinkDeployment turns it on with `job.autoscaler.enabled: "true"`.
+watchNamespaces: [apps]
+
+# Both containers are JVMs: without explicit sizing they size threads/heap for all host CPUs and got
+# OOMKilled at 768Mi / 256Mi on a 32-CPU Docker VM.
+operatorPod:
+  resources:
+    requests: { cpu: 100m, memory: 512Mi }
+    limits: { memory: 1Gi }
+  webhook:
+    resources:
+      requests: { cpu: 20m, memory: 256Mi }
+      limits: { memory: 512Mi }
+
+jvmArgs:
+  operator: "-Xms256m -Xmx512m -XX:ActiveProcessorCount=2"
+  webhook: "-Xms64m -Xmx192m -XX:ActiveProcessorCount=1"
+
+metrics:
+  port: 9999
+
+defaultConfiguration:
+  create: true
+  append: true
+  # Operator keys configure the operator; the rest are defaults for every FlinkDeployment it manages.
+  flink-conf.yaml: |+
+    kubernetes.operator.metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+    kubernetes.operator.metrics.reporter.prom.port: 9999
+    kubernetes.operator.reconcile.interval: 15 s
+    kubernetes.operator.observer.progress-check.interval: 5 s
+    # every job exposes Prometheus metrics on 9249 (scraped by the flink-jobs PodMonitor)
+    metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+    metrics.reporter.prom.port: 9249

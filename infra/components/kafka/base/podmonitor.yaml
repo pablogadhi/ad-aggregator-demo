@@ -1,0 +1,22 @@
+# Brokers (JMX exporter) and the Kafka exporter both expose port tcp-prometheus.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: kafka
+  namespace: data
+spec:
+  selector:
+    matchLabels:
+      strimzi.io/cluster: kafka
+    matchExpressions:
+      - { key: strimzi.io/kind, operator: In, values: [Kafka] }
+  podMetricsEndpoints:
+    - path: /metrics
+      port: tcp-prometheus
+      relabelings:
+        - action: labelmap
+          regex: __meta_kubernetes_pod_label_(strimzi_io_.+)
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: kubernetes_pod_name
+        - sourceLabels: [__meta_kubernetes_pod_node_name]
+          targetLabel: node_name

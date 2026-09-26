@@ -1,0 +1,30 @@
+# Operator metrics (reconcile loops, autoscaler decisions: flink_k8soperator_*)
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: flink-operator
+  namespace: flink-operator
+spec:
+  selector:
+    matchLabels: { app.kubernetes.io/name: flink-kubernetes-operator }
+  podMetricsEndpoints:
+    - port: metrics
+---
+# Job metrics (JobManager + TaskManagers of every FlinkDeployment in apps): busy time, backpressure,
+# Kafka source lag (pendingRecords), checkpoints — what the job autoscaler looks at, now in Grafana.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: flink-jobs
+  namespace: apps
+spec:
+  selector:
+    matchLabels: { type: flink-native-kubernetes }
+  podMetricsEndpoints:
+    # Flink pods don't declare the reporter port, so scrape one declared port per pod (JM rest
+    # 8081, TM rpc 6122) and point it at the pod IP on 9249.
+    - relabelings:
+        - { sourceLabels: [__meta_kubernetes_pod_container_port_number], regex: "8081|6122", action: keep }
+        - { sourceLabels: [__meta_kubernetes_pod_ip], targetLabel: __address__, replacement: "$1:9249" }
+        - { sourceLabels: [__meta_kubernetes_pod_label_app], targetLabel: flink_deployment }
+        - { sourceLabels: [__meta_kubernetes_pod_label_component], targetLabel: flink_component }

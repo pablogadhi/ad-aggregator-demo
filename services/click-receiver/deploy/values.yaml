@@ -1,0 +1,33 @@
+# Overrides for infra/charts/app (see its values.yaml for every option)
+# click-receiver: the hot path (spec §5.1). Stateless, HPA 3-9, spread over zones by the chart.
+replicas: 3                      # PDB maxUnavailable 1 of >= 3
+autoscaling:
+  enabled: true
+  minReplicas: 3                 # one per zone: losing a zone keeps 2/3 of capacity
+  maxReplicas: 9
+  targetCPU: 500m                # one uvicorn process tops out at ~1 core
+connections: [postgres, kafka, redis]   # POSTGRES_URL/READ_URL, KAFKA_BOOTSTRAP_SERVERS, REDIS_URL/MODE
+env:
+  CLICKS_TOPIC: clicks
+  DEDUP_TTL_SECONDS: "600"
+  AD_CACHE_TTL_SECONDS: "60"
+  REDIS_TIMEOUT_MS: "50"
+  KAFKA_DELIVERY_TIMEOUT_MS: "1500"
+  HOT_THRESHOLD_CLICKS_10M: "1200"
+  HOT_MARK_TTL_SECONDS: "600"
+  HOT_PERMANENT_AFTER_MARKS: "10"
+  HOT_SALT_BUCKETS: "12"
+  HOT_SALTING_ENABLED: "true"
+  HOT_FLUSH_INTERVAL_MS: "1000"
+  HOT_REFRESH_INTERVAL_MS: "2000"
+route:
+  enabled: true
+  pathPrefix: /api/click-receiver   # http://localhost:8080/api/click-receiver/...
+  timeout: 2s                        # matches the BackendTrafficPolicy (infra/design): no retries
+resources:
+  requests: { cpu: 200m, memory: 160Mi }
+  limits: { memory: 384Mi }
+# Graceful shutdown: preStop sleep (5 s) drops the pod from the gateway, uvicorn drains in-flight
+# requests (each waits for its Kafka ack, <= 1.5 s), then the lifespan flushes the hot-ad counters
+# and the producer (flush <= 10 s). 30 s covers all of it.
+terminationGracePeriodSeconds: 30

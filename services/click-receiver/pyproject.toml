@@ -1,0 +1,26 @@
+[project]
+name = "click-receiver"
+version = "0.1.0"
+description = "click-receiver — see design/spec.md"
+requires-python = ">=3.12"
+# Add component clients as needed, e.g. "sdl-common[postgres]", "confluent-kafka", "redis", "boto3".
+dependencies = [
+    "prometheus-client>=0.26.0",
+    "sdl-common[kafka,postgres,redis]",
+]
+
+[tool.uv.sources]
+sdl-common = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "fakeredis[lua]>=2.30",
+    "jsonschema>=4.26.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/click_receiver"]

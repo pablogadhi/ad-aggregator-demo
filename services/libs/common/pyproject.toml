@@ -12,6 +12,10 @@ dependencies = [
 
 [project.optional-dependencies]
 postgres = ["psycopg[binary,pool]>=3.3.6"]
+kafka = ["confluent-kafka>=2.15.1"]
+redis = [
+    "redis>=8.1.0",
+]
 
 [build-system]
 requires = ["hatchling"]

@@ -1,0 +1,43 @@
+# spec §4.2 — the API-gateway box. Targets the HTTPRoutes the app chart creates (named after the
+# release); policies for routes that don't exist yet are accepted and attach once Tilt deploys them.
+#
+# JWT at the edge for ad-placement + analytics: RS256 tokens minted by `auth` with the jwt-conn key,
+# verified against the local JWKS in ConfigMap jwt-jwks (written by install.sh from jwt-conn).
+# Verified claims are copied into headers, overwriting anything the client sent.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: jwt
+  namespace: apps
+spec:
+  targetRefs:
+    - { group: gateway.networking.k8s.io, kind: HTTPRoute, name: ad-placement }
+    - { group: gateway.networking.k8s.io, kind: HTTPRoute, name: analytics }
+  jwt:
+    providers:
+      - name: ad-aggregator
+        issuer: ad-aggregator-auth
+        audiences: [ad-aggregator]
+        localJWKS:
+          type: ValueRef
+          valueRef: { group: "", kind: ConfigMap, name: jwt-jwks }
+        claimToHeaders:
+          - { claim: sub, header: X-Auth-Sub }
+          - { claim: role, header: X-Auth-Role }
+          - { claim: advertiser_id, header: X-Auth-Advertiser-Id }
+---
+# click-receiver: fail fast (2 s), never retry at the gateway — a retried click must be visible to
+# the client, not hidden behind the proxy.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: click-receiver
+  namespace: apps
+spec:
+  targetRefs:
+    - { group: gateway.networking.k8s.io, kind: HTTPRoute, name: click-receiver }
+  timeout:
+    http:
+      requestTimeout: 2s
+  retry:
+    numRetries: 0

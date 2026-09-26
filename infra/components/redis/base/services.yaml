@@ -1,0 +1,26 @@
+# Client entry point (cluster clients use it as the seed, then follow CLUSTER SLOTS by hostname).
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: data
+  labels: { app.kubernetes.io/name: redis }
+spec:
+  selector: { app.kubernetes.io/name: redis }
+  ports:
+    - { name: redis, port: 6379, targetPort: redis }
+---
+# Stable per-pod DNS: redis-N.redis-headless.data.svc.cluster.local (announced as the node hostname).
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-headless
+  namespace: data
+  labels: { app.kubernetes.io/name: redis }
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true   # peers must resolve each other while (re)starting
+  selector: { app.kubernetes.io/name: redis }
+  ports:
+    - { name: redis, port: 6379, targetPort: redis }
+    - { name: bus, port: 16379, targetPort: bus }

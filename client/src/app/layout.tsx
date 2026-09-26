@@ -3,8 +3,8 @@ import type { ReactNode } from "react";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "System Design Lab",
-  description: "Demo client for the design running in the local cluster",
+  title: "Ad Click Aggregator",
+  description: "Demo client for the ad-aggregator design running in the local cluster",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
@@ -12,8 +12,16 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     <html lang="en">
       <body>
         <header>
-          <strong>System Design Lab</strong>
+          <strong>
+            <a href="/" className="brand">
+              ad-aggregator
+            </a>
+          </strong>
           <nav>
+            <a href="/">Feed</a>
+            <a href="/advertiser">Advertiser</a>
+            <a href="/advertiser/analytics">Analytics</a>
+            <a href="/hot-ads">Hot ads</a>
             <a href="http://grafana.localhost:8080" target="_blank" rel="noreferrer">
               Grafana
             </a>

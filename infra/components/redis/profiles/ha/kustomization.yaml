@@ -1,0 +1,12 @@
+# ha: Redis Cluster, 3 primaries + 3 replicas (MODE=cluster), 2 pods per zone. install.sh creates the
+# cluster with one primary per zone and each replica in a different zone from its primary.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+  - pdb.yaml
+patches:
+  - target: { kind: StatefulSet, name: redis }
+    patch: |-
+      - { op: replace, path: /spec/replicas, value: 6 }
+      - { op: replace, path: /spec/template/spec/containers/0/env/0/value, value: cluster }

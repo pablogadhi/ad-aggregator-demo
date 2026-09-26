@@ -1,0 +1,5 @@
+# small: the operator only (1 replica). Jobs bring their own JM/TM sizing in their FlinkDeployment.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base

@@ -1,0 +1,5 @@
+# Strimzi cluster operator: watches only the data namespace (instances live there).
+watchNamespaces: [data]
+resources:
+  requests: { cpu: 100m, memory: 256Mi }
+  limits: { memory: 384Mi }

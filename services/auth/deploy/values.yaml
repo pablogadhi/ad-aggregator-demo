@@ -1,0 +1,11 @@
+# Overrides for infra/charts/app (see its values.yaml for every option)
+replicas: 2                      # spread across zones by the chart (+ PDB)
+connections: [jwt]               # Secret apps/jwt-conn -> JWT_PRIVATE_KEY_PEM, JWT_PUBLIC_KEY_PEM, JWT_KID, JWT_ISSUER, JWT_AUDIENCE
+env:
+  TOKEN_TTL_SECONDS: "3600"
+route:
+  enabled: true
+  pathPrefix: /api/auth          # no JWT at the gateway (this is the issuer)
+resources:
+  requests: { cpu: 50m, memory: 128Mi }
+  limits: { memory: 256Mi }

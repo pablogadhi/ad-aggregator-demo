@@ -33,8 +33,11 @@ for svc in stack.get('services') or []:
     )
 
 # --- pipelines: each pipelines/<name>/Tiltfile defines its own build + deploy ---------------
+# Convention: it must also define a resource named `<name>-running` that succeeds once the job is
+# actually running (pods alone don't mean the job was submitted); e2e waits for it.
 for p in stack.get('pipelines') or []:
     include('pipelines/%s/Tiltfile' % p)
+    deployed.append('%s-running' % p)
 
 # --- client ------------------------------------------------------------------------------
 if stack.get('client'):

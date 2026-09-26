@@ -1,0 +1,122 @@
+# click-aggregator: Flink SQL job (spec §6.1) on the Flink Kubernetes Operator 1.16.1 (infra/components/flink).
+# Image built by ../Tiltfile (Tilt rewrites spec.image to the local registry).
+apiVersion: flink.apache.org/v1beta1
+kind: FlinkDeployment
+metadata:
+  name: click-aggregator
+  namespace: apps
+spec:
+  image: click-aggregator
+  imagePullPolicy: IfNotPresent
+  flinkVersion: v2_2
+  serviceAccount: flink                  # created in `apps` by the operator chart
+  flinkConfiguration:
+    # --- slots / parallelism --------------------------------------------------------------------
+    taskmanager.numberOfTaskSlots: "1"   # TMs == parallelism; the autoscaler adds/removes TMs
+    parallelism.default: "3"
+    pipeline.max-parallelism: "120"      # fixed key groups across rescales (divisible by 3,4,6,12)
+    jobmanager.scheduler: adaptive       # parallelism-only changes rescale in place
+    # --- exactly-once state on S3 (Floci via aws-conn; endpoint/keys added by sdl-entrypoint.sh) --
+    execution.checkpointing.interval: 10 s
+    execution.checkpointing.mode: EXACTLY_ONCE
+    execution.checkpointing.dir: s3://flink-state/click-aggregator/checkpoints
+    execution.checkpointing.savepoint-dir: s3://flink-state/click-aggregator/savepoints
+    execution.checkpointing.externalized-checkpoint-retention: RETAIN_ON_CANCELLATION
+    execution.checkpointing.num-retained: "3"
+    execution.checkpointing.incremental: "true"
+    execution.checkpointing.timeout: 2 min
+    # a failed checkpoint (S3 hiccup, analytics-db flush failing) must not fail the job at once
+    execution.checkpointing.tolerable-failed-checkpoints: "5"
+    state.backend.type: rocksdb
+    # --- JobManager HA: a killed JM recovers the job from the latest checkpoint ------------------
+    high-availability.type: kubernetes
+    high-availability.storageDir: s3://flink-state/click-aggregator/ha
+    # --- failures (TM loss, analytics-db down, table not migrated yet): restart from checkpoint ---
+    restart-strategy.type: exponential-delay
+    restart-strategy.exponential-delay.initial-backoff: 1 s
+    restart-strategy.exponential-delay.max-backoff: 30 s
+    restart-strategy.exponential-delay.backoff-multiplier: "2.0"
+    restart-strategy.exponential-delay.reset-backoff-threshold: 5 min
+    restart-strategy.exponential-delay.jitter-factor: "0.1"
+    # --- memory: 1 GiB TMs with RocksDB (Flink's defaults would leave ~26 MB task heap) ----------
+    taskmanager.memory.managed.fraction: "0.2"
+    taskmanager.memory.jvm-metaspace.size: 192m
+    taskmanager.memory.jvm-overhead.min: 128m
+    # --- image entry point: adds the S3 settings from env (secrets never land in a ConfigMap) ----
+    kubernetes.entry.path: /opt/flink/bin/sdl-entrypoint.sh
+    # the operator replaces the image's config.yaml, so repeat its JDK 17 opens (+ UTC for pgjdbc)
+    env.java.opts.all: >-
+      -Duser.timezone=UTC
+      --add-exports=java.rmi/sun.rmi.registry=ALL-UNNAMED
+      --add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED
+      --add-exports=jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED
+      --add-exports=jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED
+      --add-exports=jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED
+      --add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED
+      --add-exports=java.security.jgss/sun.security.krb5=ALL-UNNAMED
+      --add-opens=java.base/java.lang=ALL-UNNAMED
+      --add-opens=java.base/java.net=ALL-UNNAMED
+      --add-opens=java.base/java.io=ALL-UNNAMED
+      --add-opens=java.base/java.nio=ALL-UNNAMED
+      --add-opens=java.base/sun.nio.ch=ALL-UNNAMED
+      --add-opens=java.base/java.lang.reflect=ALL-UNNAMED
+      --add-opens=java.base/java.text=ALL-UNNAMED
+      --add-opens=java.base/java.time=ALL-UNNAMED
+      --add-opens=java.base/java.util=ALL-UNNAMED
+      --add-opens=java.base/java.util.concurrent=ALL-UNNAMED
+      --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED
+      --add-opens=java.base/java.util.concurrent.locks=ALL-UNNAMED
+    # --- job autoscaler (operator): per-vertex parallelism 3..12 on busy time + Kafka lag --------
+    # 12 = partitions of `clicks` (more source subtasks would idle); 3 = one subtask per zone.
+    # Windows are lab-tuned so a 5-10 min load run can trigger a scale-up (defaults: 15 min
+    # metrics window, 5 min stabilization, 1 h scale-down delay).
+    job.autoscaler.enabled: "true"
+    job.autoscaler.scaling.enabled: "true"
+    job.autoscaler.vertex.min-parallelism: "3"
+    job.autoscaler.vertex.max-parallelism: "12"
+    job.autoscaler.utilization.target: "0.7"
+    job.autoscaler.metrics.window: 3 min
+    job.autoscaler.stabilization.interval: 1 min
+    job.autoscaler.restart.time: 1 min
+    job.autoscaler.catch-up.duration: 2 min
+    job.autoscaler.backlog-processing.lag-threshold: 1 min
+    job.autoscaler.scale-down.interval: 5 min
+  podTemplate:
+    spec:
+      containers:
+        - name: flink-main-container
+          envFrom:
+            - { prefix: KAFKA_, secretRef: { name: kafka-conn } }                # KAFKA_BOOTSTRAP_SERVERS
+            - { prefix: ANALYTICS_DB_, secretRef: { name: analytics-db-conn } }  # ANALYTICS_DB_JDBC_URL/USER/PASSWORD
+            - { prefix: AWS_, secretRef: { name: aws-conn } }                    # AWS_ENDPOINT_URL/REGION/keys
+          env:
+            - { name: ENABLE_BUILT_IN_PLUGINS, value: flink-s3-fs-presto-2.2.1.jar }
+            - { name: CLICKS_TOPIC, value: clicks }
+            - { name: CONSUMER_GROUP, value: click-aggregator }
+            - { name: STATE_BUCKET, value: flink-state }   # informational: the s3:// paths above use it
+            - { name: CHECKPOINT_INTERVAL, value: 10s }
+            - { name: STATE_TTL, value: 2h }
+            - { name: LATE_CUTOFF, value: 1h }
+  jobManager:
+    replicas: 1                          # HA = restart + recover from S3, not a standby JM
+    resource: { memory: 1024m, cpu: 0.5 }
+  taskManager:
+    resource: { memory: 1024m, cpu: 0.5 }
+    podTemplate:
+      spec:
+        # spread TMs over zones (a zone loss removes a third of the subtasks, not all of them)
+        topologySpreadConstraints:
+          - maxSkew: 1
+            topologyKey: topology.kubernetes.io/zone
+            whenUnsatisfiable: ScheduleAnyway
+            labelSelector: { matchLabels: { app: click-aggregator, component: taskmanager } }
+          - maxSkew: 1
+            topologyKey: kubernetes.io/hostname
+            whenUnsatisfiable: ScheduleAnyway
+            labelSelector: { matchLabels: { app: click-aggregator, component: taskmanager } }
+  job:
+    jarURI: local:///opt/flink/usrlib/click-aggregator.jar
+    entryClass: dev.sdl.clickaggregator.ClickAggregatorJob
+    parallelism: 3
+    upgradeMode: last-state              # image/config changes + rescales resume from the latest checkpoint
+    state: running

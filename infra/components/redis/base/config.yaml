@@ -1,0 +1,59 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-config
+  namespace: data
+data:
+  redis.conf: |
+    port 6379
+    bind 0.0.0.0 -::*
+    protected-mode no
+    dir /data
+    appendonly yes
+    appendfsync everysec
+    save ""
+    maxmemory 256mb
+    maxmemory-policy volatile-lru
+    tcp-keepalive 60
+  # Starts redis-server in the mode given by $REDIS_MODE (standalone | cluster).
+  # Cluster mode: nodes announce their stable pod FQDN (clients follow MOVED/ASK by hostname), and on
+  # restart the IPs in nodes.conf are refreshed from those FQDNs — pod IPs change when pods are
+  # recreated, and without this a cluster whose pods all restart at once could not re-form.
+  start.sh: |
+    #!/bin/sh
+    set -eu
+    cp /config/redis.conf /tmp/redis.conf
+    if [ "$REDIS_MODE" = cluster ]; then
+      fqdn="$POD_NAME.redis-headless.$POD_NAMESPACE.svc.cluster.local"
+      cat >> /tmp/redis.conf <<CONF
+    cluster-enabled yes
+    cluster-config-file /data/nodes.conf
+    cluster-node-timeout 5000
+    cluster-require-full-coverage no
+    cluster-announce-ip $POD_IP
+    cluster-announce-hostname $fqdn
+    cluster-preferred-endpoint-type hostname
+    CONF
+      if [ -s /data/nodes.conf ]; then
+        : > /tmp/nodes.new
+        while read -r id addr rest; do
+          if [ "$id" = vars ]; then echo "$id $addr $rest" >> /tmp/nodes.new; continue; fi
+          ipport=${addr%%,*}; tail=${addr#"$ipport"}; host=$(echo "$tail" | cut -d, -f2)
+          oldip=${ipport%%:*}; portpart=${ipport#*:}; newip=""
+          case "$rest" in
+            *myself*) newip=$POD_IP ;;
+            *) if [ -n "$host" ]; then
+                 for _ in 1 2 3 4 5 6 7 8 9 10; do
+                   newip=$(getent hosts "$host" | awk '{print $1; exit}' || true)
+                   [ -n "$newip" ] && break; sleep 1
+                 done
+               fi ;;
+          esac
+          [ -n "$newip" ] || newip=$oldip
+          [ "$newip" = "$oldip" ] || echo "nodes.conf: $host $oldip -> $newip"
+          echo "$id $newip:$portpart$tail $rest" >> /tmp/nodes.new
+        done < /data/nodes.conf
+        mv /tmp/nodes.new /data/nodes.conf
+      fi
+    fi
+    exec docker-entrypoint.sh redis-server /tmp/redis.conf

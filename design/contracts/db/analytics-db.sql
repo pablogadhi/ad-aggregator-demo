@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS click_counts (
     advertiser_id  bigint      NOT NULL,           -- denormalized from the click event
     minute         timestamptz NOT NULL,           -- start of the UTC minute (seconds = 0)
     click_count    bigint      NOT NULL CHECK (click_count >= 0),
-    updated_at     timestamptz NOT NULL DEFAULT now(),
+    updated_at     timestamptz NOT NULL DEFAULT now(),  -- set by Flink: processing time of the last change
     PRIMARY KEY (ad_id, minute)
 );
 
@@ -20,6 +20,7 @@ CREATE INDEX IF NOT EXISTS click_counts_advertiser_minute_idx
 
 -- Upsert the Flink sink performs (for reference):
 --   INSERT INTO click_counts (ad_id, advertiser_id, minute, click_count, updated_at)
---   VALUES ($1, $2, $3, $4, now())
+--   VALUES ($1, $2, $3, $4, $5)
 --   ON CONFLICT (ad_id, minute) DO UPDATE
---     SET click_count = EXCLUDED.click_count, updated_at = now();
+--     SET advertiser_id = EXCLUDED.advertiser_id, click_count = EXCLUDED.click_count,
+--         updated_at = EXCLUDED.updated_at;

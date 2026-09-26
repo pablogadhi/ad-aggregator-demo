@@ -115,7 +115,8 @@ across zones, PDB).
 2. Ad lookup: in-process cache (TTL 60 s, max ~50k entries) → `POSTGRES_READ_URL` → on a miss,
    retry on the primary (`POSTGRES_URL`) so a just-created ad isn't a 404 because of replica lag.
    Unknown or inactive ad → 404, nothing produced.
-3. Dedup: `SET click:dedup:{ad_id}:{user_id} <click_id> NX EX 600` with a 50 ms timeout.
+3. Dedup: `SET click:dedup:<ad_id>:<user_id> <click_id> NX EX 600` with a 50 ms timeout (plain key,
+   no hash tag, so a viral ad's dedup keys spread over all shards).
    - key existed → `duplicate`: redirect, **don't** produce.
    - Redis error/timeout → **fail open**: treat as new (availability + no loss beats exact dedup);
      count it in metric `click_dedup_failopen_total`.
@@ -224,8 +225,10 @@ commands and Lua work in cluster mode). Global keys live in their own slots.
   grouping by `ad_id` would funnel every salted record back into one subtask):
   1. `GROUP BY ad_id, advertiser_id, salt, minute = floor(clicked_at TO MINUTE)` → `count(*)`
      (a hot ad is spread over up to 12 keys)
-  2. `GROUP BY ad_id, advertiser_id, minute` → `SUM(partial)` (at most 12 updates/s per hot ad at
-     1 s mini-batches, instead of one per click)
+  2. `GROUP BY ad_id, minute` → `SUM(partial)`, `MAX(advertiser_id)` (constant per ad). The group
+     key must equal the sink's primary key `(ad_id, minute)`; otherwise the planner emits
+     delete+insert pairs and rows briefly disappear. At most 12 updates/s per hot ad at 1 s
+     mini-batches, instead of one per click.
   Mini-batch ~1 s (`table.exec.mini-batch.*`), plus local-global aggregation
   (`table.optimizer.agg-phase-strategy: TWO_PHASE`) so stage 2 is pre-aggregated per subtask.
 - Sink: JDBC upsert into `click_counts` with primary key `(ad_id, minute)` (Postgres `ON CONFLICT
@@ -346,7 +349,10 @@ Each runs under the `clicks` load (reduced to 300 rps, 5 min) and ends with reco
 - "Aggregated data is de-aggregated and stored" (data flow step 4) is read as "per-minute
   aggregates are stored and rolled up at query time".
 - A click during a Kafka outage returns 503 rather than redirecting: the loss is visible, never
-  silent.
+  silent. A 503 after an ack *timeout* may still have been written, so a client retry can
+  over-count (with dedup fail-open, the only over-count paths; no path loses an accepted click).
+- `click_counts.updated_at` is the Flink processing time of the last change (the JDBC upsert can't
+  express `now()`); close enough for the freshness display.
 - Hot-ad salting **(decided)**: threshold 1,200 accepted clicks per 10 min (lab value; the uniform
   load gives ~150/ad/10 min, so only the skewed ad crosses it), hot for 10 min per marking,
   permanent after 10 markings. The sliding window is minute-granular (approximate). Per-ad ordering

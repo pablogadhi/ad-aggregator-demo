@@ -1,6 +1,9 @@
 """Tiny SQL migration runner.
 
-    python -m sdl_common.migrate <package.with.sql.files>      (uses POSTGRES_URL)
+    python -m sdl_common.migrate <package.with.sql.files> [URL_ENV]   (URL_ENV defaults to POSTGRES_URL)
+
+URL_ENV names the env var holding the DSN, e.g. ANALYTICS_DB_URL for a service whose database is
+the component instance `analytics-db` (connection `analytics-db` -> ANALYTICS_DB_* env vars).
 
 Applies `NNNN_name.sql` files shipped inside a Python package, in lexical order, each in its own
 transaction, recording them in `schema_migrations`. A Postgres advisory lock serialises concurrent
@@ -49,10 +52,14 @@ def migrate(package: str, url: str) -> list[str]:
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    if len(sys.argv) != 2:
+    if len(sys.argv) not in (2, 3):
         print(__doc__)
         return 2
-    url = os.environ["POSTGRES_URL"]
+    url_env = sys.argv[2] if len(sys.argv) == 3 else "POSTGRES_URL"
+    url = os.environ.get(url_env)
+    if not url:
+        log.error("%s is not set (add the connection to deploy/values.yaml)", url_env)
+        return 2
     # The DB may still be failing over / starting: retry for up to ~2 minutes.
     for attempt in range(40):
         try:
