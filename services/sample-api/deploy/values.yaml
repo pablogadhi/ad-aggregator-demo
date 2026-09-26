@@ -1,9 +1,0 @@
-# Overrides for infra/charts/app (see its values.yaml for every option)
-replicas: 3
-connections: [postgres]          # -> POSTGRES_URL, POSTGRES_READ_URL, ... from secret apps/postgres-conn
-route:
-  enabled: true
-  pathPrefix: /api/sample-api    # http://localhost:8080/api/sample-api/items
-migrations:
-  enabled: true
-  command: ["python", "-m", "sdl_common.migrate", "sample_api.migrations"]
