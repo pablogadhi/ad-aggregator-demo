@@ -11,7 +11,9 @@ k6 run -e BASE_URL=http://localhost:8080 -e RUN=clicks loadtest/reconcile.js
   Setup creates 100 advertisers × 20 ads. Accepted clicks are counted per advertiser and written to
   `loadtest/results/<RUN>.json` by `handleSummary`.
 - `reconcile.js`: polls the analytics totals of those advertisers until they equal k6's accepted counts
-  (or `TIMEOUT`, default 90 s); prints the lag, over-count and loss; fails on mismatch.
+  (or `TIMEOUT`, default 90 s); prints the lag, lost, over-count and the ambiguous count (503s + other
+  non-302 answers from the run's summary). Pass = lost == 0 (analytics >= k6 accepted for every
+  advertiser) and over-count <= ambiguous; fails (non-zero exit) otherwise.
 - `timeline.py`: error % and p95 per 10 s from `--out csv=loadtest/results/<RUN>.csv` (chaos runs).
 - The hot scenario's teardown reads per-partition message rates of `clicks` from Prometheus
   (kafka-exporter `kafka_topic_partition_current_offset`) and gates `max/min < 2` with salting.

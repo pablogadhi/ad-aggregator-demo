@@ -119,3 +119,17 @@ keys from the `AWS_*` env — credentials stay in Secrets. Switch the S3 plugin 
 - Grafana/Prometheus (PodMonitor `apps/flink-jobs`, reporter port 9249 from the operator defaults):
   `flink_taskmanager_job_task_operator_clicksDroppedLate`, Kafka source `pendingRecords` (lag),
   busy time, checkpoint durations; parallelism in `pipeline.jobvertex-parallelism-overrides`.
+
+## Recovery after a hard stop (job stuck in `INITIALIZING`)
+
+If Docker Desktop is quit or the host restarts while the lab runs, Floci can keep a 0-byte object
+for the last HA checkpoint pointer (`S3 object … has 0 bytes but metadata declares N` in the `aws`
+pod log). The JobManager then retries restoring it forever: the job stays `INITIALIZING`, no
+TaskManagers start, analytics stops updating, and spec changes (e.g. memory) are never rolled out
+because `upgradeMode: last-state` waits for a healthy job.
+
+Fix: `pipelines/click-aggregator/reset.sh`, then `make ci`. Deleting the FlinkDeployment makes the
+operator drop the HA ConfigMaps; the new job resumes from the consumer group's committed Kafka
+offsets. State for minutes still open at the crash is lost (only after a hard stop; pod kills,
+JM/TM kills and node-down recover from checkpoints with no loss). Prefer `make down` (or at least
+stopping load) before quitting Docker Desktop.

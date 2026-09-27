@@ -4,8 +4,12 @@
 //
 //   k6 run -e BASE_URL=http://localhost:8080 -e RUN=<name> [-e TIMEOUT=90] loadtest/reconcile.js
 //
-// Prints the reconciliation lag (seconds after the load ended until every advertiser matched) and,
-// when they don't match, every difference (over-count > 0, loss < 0). Exit code != 0 on mismatch.
+// Pass criterion (spec §10 teardown, §12): lost = 0 (analytics >= k6 accepted for EVERY advertiser)
+// AND over-count (sum of analytics - k6 accepted, where positive) <= ambiguous responses (every
+// non-302 answer to a click during the run: 503s + gateway 504s/timeouts/connection errors, i.e.
+// result.unavailable_503 + result.other from the load run's summary). Prints the reconciliation lag
+// (seconds after the load ended until the totals stopped changing / matched), lost, over-count,
+// ambiguous count and pass/fail. Exit code != 0 on fail.
 import http from 'k6/http';
 import { sleep } from 'k6';
 import { Counter, Trend } from 'k6/metrics';
@@ -16,13 +20,14 @@ const TIMEOUT = Number(__ENV.TIMEOUT || 90);
 const result = JSON.parse(open(__ENV.RESULT || `./results/${RUN}.json`));
 
 const mismatched = new Counter('reconcile_mismatched_advertisers');
-const lost = new Counter('reconcile_lost');
-const over = new Counter('reconcile_overcount');
+const lostMetric = new Counter('reconcile_lost');
+const overMetric = new Counter('reconcile_overcount');
+const failMetric = new Counter('reconcile_fail');
 const lag = new Trend('reconcile_lag_s');
 
 export const options = {
   scenarios: { reconcile: { executor: 'shared-iterations', vus: 1, iterations: 1, maxDuration: `${TIMEOUT + 300}s` } },
-  thresholds: { reconcile_mismatched_advertisers: ['count==0'] },
+  thresholds: { reconcile_fail: ['count==0'] },
 };
 
 function token(advertiserId) {
@@ -62,25 +67,43 @@ export default function () {
     if (Date.now() > deadline) break;
     sleep(2);
   }
+
+  // Final tally over every advertiser (matched ones contribute 0/0).
+  let lost = 0;
+  let over = 0;
+  const diffs = [];
+  for (const id of ids) {
+    const g = got[id] !== undefined ? got[id] : 0;
+    const d = g - expected[id];
+    if (d < 0) lost += -d;
+    else if (d > 0) over += d;
+    if (d !== 0) diffs.push([id, expected[id], g, d]);
+  }
+  const ambiguous = (result.unavailable_503 || 0) + (result.other || 0);
+  const pass = lost === 0 && over <= ambiguous;
+
   const expTotal = ids.reduce((s, id) => s + expected[id], 0);
   const gotTotal = ids.reduce((s, id) => s + (got[id] || 0), 0);
-  console.log(`reconcile run=${result.run} scenario=${result.scenario}: k6 accepted=${expTotal} (result file: ${result.accepted_total}), analytics=${gotTotal}, 503s during load=${result.unavailable_503}`);
-  if (firstSeenAll) {
+  console.log(`reconcile run=${result.run} scenario=${result.scenario}: k6 accepted=${expTotal} (result file: ${result.accepted_total}), analytics=${gotTotal}`);
+  console.log(`reconcile: ambiguous=${ambiguous} (503=${result.unavailable_503 || 0} other=${result.other || 0})`);
+
+  if (diffs.length === 0) {
+    firstSeenAll = firstSeenAll || Date.now();
     const l = (firstSeenAll - ended) / 1000;
     lag.add(l);
     console.log(`reconcile: EXACT MATCH for ${ids.length} advertisers, ${l.toFixed(1)}s after the load ended`);
   } else {
-    let o = 0;
-    let lo = 0;
-    for (const id of pending) {
-      const d = (got[id] || 0) - expected[id];
-      if (d > 0) o += d;
-      else lo += -d;
-      console.log(`  advertiser ${id}: k6 accepted=${expected[id]} analytics=${got[id]} diff=${d > 0 ? '+' : ''}${d}`);
+    const l = (Date.now() - ended) / 1000;
+    lag.add(l);
+    for (const [id, exp, g, d] of diffs) {
+      console.log(`  advertiser ${id}: k6 accepted=${exp} analytics=${g} diff=${d > 0 ? '+' : ''}${d}`);
     }
-    mismatched.add(pending.length);
-    over.add(o);
-    lost.add(lo);
-    console.log(`reconcile: MISMATCH after ${TIMEOUT}s: ${pending.length} advertisers, over-count=${o}, lost=${lo}`);
+    mismatched.add(diffs.length);
+    console.log(`reconcile: ${diffs.length} advertisers differ after ${l.toFixed(1)}s (timeout=${TIMEOUT}s)`);
   }
+
+  lostMetric.add(lost);
+  overMetric.add(over);
+  if (!pass) failMetric.add(1);
+  console.log(`reconcile: lost=${lost} over-count=${over} ambiguous=${ambiguous} -> ${pass ? 'PASS' : 'FAIL'} (criterion: lost==0 and over-count<=ambiguous)`);
 }
