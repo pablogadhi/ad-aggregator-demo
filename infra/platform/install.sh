@@ -19,7 +19,7 @@ logs="$SDL_ROOT/.cache/logs"; mkdir -p "$logs"
 pids=()
 run_bg() { local name=$1; shift; ( "$@" >"$logs/$name.log" 2>&1 ) & pids+=("$!:$name"); }
 
-run_bg envoy-gateway  helm_install eg oci://docker.io/envoyproxy/gateway-helm "$ENVOY_GATEWAY_VERSION" envoy-gateway-system
+run_bg envoy-gateway  helm_install eg oci://docker.io/envoyproxy/gateway-helm "$ENVOY_GATEWAY_VERSION" envoy-gateway-system -f "$HERE/values/envoy-gateway.yaml"
 run_bg cert-manager   helm_install cert-manager jetstack/cert-manager "$CERT_MANAGER_VERSION" cert-manager --set crds.enabled=true
 run_bg metrics-server helm_install metrics-server metrics-server/metrics-server "$METRICS_SERVER_VERSION" kube-system -f "$HERE/values/metrics-server.yaml"
 run_bg monitoring     helm_install kps prometheus-community/kube-prometheus-stack "$KUBE_PROMETHEUS_STACK_VERSION" monitoring -f "$HERE/values/kube-prometheus-stack.yaml"

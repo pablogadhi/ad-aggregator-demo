@@ -9,7 +9,7 @@ after all components are installed (it is idempotent; re-run freely).
 | `buckets-job.yaml`      | Job `apps/create-buckets` (aws-cli + `aws-conn`): S3 bucket **`flink-state`** in Floci                  | §6.1  |
 | `install.sh`            | applies the above; creates **Secret `apps/jwt-conn`** once; writes ConfigMap `apps/jwt-jwks`; applies policies | §4.2 |
 | `jwks.py`               | stdlib-only PEM → JWKS / RFC 7638 thumbprint (no host installs)                                         | §4.2  |
-| `gateway-policies.yaml` | `SecurityPolicy jwt` + `BackendTrafficPolicy click-receiver`                                            | §4.2  |
+| `gateway-policies.yaml` | `SecurityPolicy jwt` + `BackendTrafficPolicy resilience` + `BackendTrafficPolicy click-receiver`        | §4.2  |
 
 ## jwt-conn (Secret in `apps`, label `sdl.dev/conn=true`)
 
@@ -33,7 +33,16 @@ secret on every run, so it can't drift from the signing key.
   `jwt-jwks` (RS256 key with `kid`), `claimToHeaders`: `sub`→`X-Auth-Sub`, `role`→`X-Auth-Role`,
   `advertiser_id`→`X-Auth-Advertiser-Id`.
 - **`BackendTrafficPolicy click-receiver`** → HTTPRoute `click-receiver`: `requestTimeout: 2s`,
-  `retry.numRetries: 0`.
+  `retry.numRetries: 0`, plus the same passive health check as below.
+- **`BackendTrafficPolicy resilience`** → HTTPRoutes `auth`, `ad-placement`, `analytics`: passive
+  outlier detection (`healthCheck.passive`: `consecutiveGatewayErrors`/`consecutive5XxErrors: 3`,
+  `baseEjectionTime: 30s`, `alwaysEjectOneEndpoint: true`, `maxEjectionPercent: 50`) with
+  `healthCheck.panicThreshold: 0` (disables Envoy's panic-route-to-everyone fallback, which would
+  otherwise re-include an ejected pod once ≥50% of a small replica set is unhealthy). Ejects dead
+  backends from Envoy's own observed failures, independent of how fast xDS/endpoint updates land
+  — see the platform-level controller HA in `infra/platform/values/envoy-gateway.yaml` and
+  `infra/platform/gateway.yaml` (EnvoyProxy `sdl-proxy`, 2 replicas zone-spread) for the other half
+  of the zone-loss fix (chaos #7).
 
 Behaviour verified on the cluster with throwaway routes named `ad-placement` / `click-receiver`
 (echo backend, since removed):

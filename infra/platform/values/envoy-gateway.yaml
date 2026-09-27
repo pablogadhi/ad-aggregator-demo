@@ -1,0 +1,15 @@
+# HA for the controller (chaos #7: 1 controller replica + 1 proxy pod landed on the same node;
+# with that node down, the survivor got no xDS updates for ~5 min until the controller
+# rescheduled). 2 replicas + leader election (on by default via controller-runtime once
+# replicas > 1) spread across zones so a single zone loss always leaves one controller able to
+# push xDS updates immediately.
+deployment:
+  replicas: 2
+  pod:
+    topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            control-plane: envoy-gateway

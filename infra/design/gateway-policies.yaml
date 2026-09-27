@@ -26,8 +26,35 @@ spec:
           - { claim: role, header: X-Auth-Role }
           - { claim: advertiser_id, header: X-Auth-Advertiser-Id }
 ---
+# Passive outlier detection for auth/ad-placement/analytics (chaos #7: a dead pod kept getting
+# ~half the traffic for minutes because xDS/endpoint updates lagged the node loss). Ejection is
+# driven by Envoy's own observed connection/5xx failures, so it works even when xDS is late.
+# panicThreshold: 0 disables Envoy's panic-routing-to-all-hosts fallback, which would otherwise
+# kick in with only 2 backend replicas (1 ejected == 50% unhealthy, at/above the default 50%
+# panic threshold) and route to the dead pod anyway; alwaysEjectOneEndpoint guarantees ejection
+# even though maxEjectionPercent would otherwise round down to 0 host with so few endpoints.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: resilience
+  namespace: apps
+spec:
+  targetRefs:
+    - { group: gateway.networking.k8s.io, kind: HTTPRoute, name: auth }
+    - { group: gateway.networking.k8s.io, kind: HTTPRoute, name: ad-placement }
+    - { group: gateway.networking.k8s.io, kind: HTTPRoute, name: analytics }
+  healthCheck:
+    panicThreshold: 0
+    passive:
+      consecutiveGatewayErrors: 3
+      consecutive5XxErrors: 3
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+      alwaysEjectOneEndpoint: true
+---
 # click-receiver: fail fast (2 s), never retry at the gateway — a retried click must be visible to
-# the client, not hidden behind the proxy.
+# the client, not hidden behind the proxy. Same passive outlier detection as above, merged into
+# this policy (one BackendTrafficPolicy per route) so dead click-receiver pods get ejected too.
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: BackendTrafficPolicy
 metadata:
@@ -41,3 +68,11 @@ spec:
       requestTimeout: 2s
   retry:
     numRetries: 0
+  healthCheck:
+    panicThreshold: 0
+    passive:
+      consecutiveGatewayErrors: 3
+      consecutive5XxErrors: 3
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+      alwaysEjectOneEndpoint: true
