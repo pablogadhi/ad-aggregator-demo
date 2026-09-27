@@ -56,4 +56,8 @@ data:
         mv /tmp/nodes.new /data/nodes.conf
       fi
     fi
+    # This script runs as root and the entrypoint drops to the redis user: anything written above
+    # (nodes.conf via mv) would stay root-owned and redis could not lock it on the next start
+    # (crash-loop). Hand /data back on every boot, which also heals volumes left root-owned.
+    if [ "$(id -u)" = 0 ]; then chown -R redis:redis /data; fi
     exec docker-entrypoint.sh redis-server /tmp/redis.conf

@@ -99,7 +99,7 @@ spec:
             - { name: LATE_CUTOFF, value: 1h }
   jobManager:
     replicas: 1                          # HA = restart + recover from S3, not a standby JM
-    resource: { memory: 1024m, cpu: 0.5 }
+    resource: { memory: 2048m, cpu: 0.5 }  # 1024m was OOMKilled after ~41 min (integrator round 1)
   taskManager:
     resource: { memory: 1024m, cpu: 0.5 }
     podTemplate:

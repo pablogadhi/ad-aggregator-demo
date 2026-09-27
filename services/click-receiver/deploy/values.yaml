@@ -3,8 +3,8 @@
 replicas: 3                      # PDB maxUnavailable 1 of >= 3
 autoscaling:
   enabled: true
-  minReplicas: 3                 # one per zone: losing a zone keeps 2/3 of capacity
-  maxReplicas: 9
+  minReplicas: 4                 # >= one per zone + headroom so a burst doesn't start on cold pods
+  maxReplicas: 18                # ~170-190 clicks/s per pod measured; 2,000 rps + headroom ≈ 15 pods
   targetCPU: 500m                # one uvicorn process tops out at ~1 core
 connections: [postgres, kafka, redis]   # POSTGRES_URL/READ_URL, KAFKA_BOOTSTRAP_SERVERS, REDIS_URL/MODE
 env:
