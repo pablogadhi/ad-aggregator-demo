@@ -70,6 +70,7 @@ class ClickStore(Protocol):
         self, ad_ids: list[int], now: float, ttl: int, permanent_after: int
     ) -> dict[int, Marking]: ...
     async def load_hot(self, now: float, permanent_after: int) -> dict[int, HotAd]: ...
+    async def connect(self) -> None: ...
 
 
 def _ok(result) -> bool:
@@ -79,18 +80,40 @@ def _ok(result) -> bool:
 class RedisClickStore:
     """`fast` serves the per-click dedup (tight socket timeout, no retries: the caller fails open);
     `bg` serves the batched hot-ad work (longer timeouts, retries), so slow background batches
-    never queue in front of a click's SET NX."""
+    never queue in front of a click's SET NX.
 
-    def __init__(self, fast, bg):
+    `refresher` (cluster mode only, see redis_cluster.py) is told about every per-click command's
+    outcome so repeated failures on one node trigger a slot-map refresh."""
+
+    def __init__(self, fast, bg, refresher=None):
         self.fast = fast
         self.bg = bg
+        self.refresher = refresher
 
     # -- hot path: exactly one round trip per click ---------------------------------------
     async def claim(self, key: str, click_id: str, ttl: int) -> bool:
-        return bool(await self.fast.set(key, click_id, nx=True, ex=ttl))
+        if self.refresher is None:
+            return bool(await self.fast.set(key, click_id, nx=True, ex=ttl))
+        try:
+            ok = bool(await self.fast.set(key, click_id, nx=True, ex=ttl))
+        except BaseException:  # incl. the caller's safety timeout cancelling us
+            self.refresher.failure(key)
+            raise
+        self.refresher.success(key)
+        return ok
 
     async def release(self, key: str) -> None:
         await self.fast.delete(key)
+
+    async def connect(self) -> None:
+        """Warm-up: load the cluster slot map and open a connection to every primary (or PING
+        the standalone server), so the first clicks don't pay for it."""
+        for client in (self.fast, self.bg):
+            if hasattr(client, "get_primaries"):  # RedisCluster
+                await client.initialize()
+                await client.ping(target_nodes=client.PRIMARIES)
+            else:
+                await client.ping()
 
     # -- batched (flusher, every ~1 s) -------------------------------------------------------
     async def add_counts(self, counts: dict[int, int], minute: int) -> tuple[dict[int, int], set[int]]:

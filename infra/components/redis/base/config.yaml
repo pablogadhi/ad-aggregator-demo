@@ -11,6 +11,11 @@ data:
     dir /data
     appendonly yes
     appendfsync everysec
+    # A hard stop (Docker Desktop quit, node kill) can leave a corrupt AOF tail; without this the
+    # node crash-loops on "Bad file format reading the append only file". Dropping up to 1 MiB of
+    # tail (≈ the last second of writes) is fine for a cache; replicas re-sync from their primary.
+    aof-load-truncated yes
+    aof-load-corrupt-tail-max-size 1048576
     save ""
     maxmemory 256mb
     maxmemory-policy volatile-lru

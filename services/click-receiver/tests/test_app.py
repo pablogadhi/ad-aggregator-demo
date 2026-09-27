@@ -212,3 +212,84 @@ def test_salting_disabled_detects_but_does_not_salt(make_client):
     [(_, key, value)] = h.producer.messages
     assert key == b"42" and assert_valid_event(value)["salt"] == 0
     assert client.get("/hot-ads").json()["salting_enabled"] is False
+
+
+# -- deadline / load shedding / ambiguous outcomes (spec §5.1 step 4) ----------------------------
+def test_ack_wait_is_capped_by_the_remaining_budget(client, h):
+    assert client.get("/click/42", params={"user_id": "u1"}).status_code == 302
+    [wait] = h.producer.ack_timeouts
+    assert 0.9 < wait <= 1.0  # min(delivery timeout 1.5 s, what is left of CLICK_DEADLINE_MS=1 s)
+
+
+def test_deadline_passed_before_produce_is_shed(make_client):
+    h, client = make_client(click_deadline_ms=50)
+    h.store.claim_delay = 0.1  # the dedup succeeds (within its 200 ms safety bound) but late
+    before = metric("clicks_total", status="shed", hot="false")
+    res = client.get("/click/42", params={"user_id": "u1"})
+    assert res.status_code == 503 and "location" not in res.headers
+    assert "overloaded" in res.json()["detail"]
+    assert h.producer.messages == [] and h.producer.ack_timeouts == []  # never produced
+    assert metric("clicks_total", status="shed", hot="false") == before + 1
+    assert asyncio.run(h.redis.exists(dedup_key(42, "u1"))) == 0  # the retry is a fresh click
+
+
+def test_slow_ad_lookup_is_shed_within_the_budget(make_client):
+    h, client = make_client(click_deadline_ms=100)
+    h.source.delay = 1.0  # cold cache + slow DB
+    before = metric("clicks_total", status="shed", hot="false")
+    res = client.post("/clicks", json={"ad_id": 42, "user_id": "u1"})
+    assert res.status_code == 503 and res.elapsed.total_seconds() < 0.5
+    assert metric("clicks_total", status="shed", hot="false") == before + 1
+    assert h.producer.messages == []
+
+
+def test_in_flight_timeout_is_ambiguous(make_client):
+    from sdl_common.kafka import DeliveryError
+
+    h, client = make_client()
+    h.producer.fail = DeliveryError("Local: Message timed out", possibly_persisted=True)
+    amb = metric("clicks_total", status="ambiguous", hot="false")
+    rej = metric("clicks_total", status="rejected", hot="false")
+    res = client.get("/click/42", params={"user_id": "u1"})
+    assert res.status_code == 503 and "unknown" in res.json()["detail"]
+    assert metric("clicks_total", status="ambiguous", hot="false") == amb + 1
+    assert metric("clicks_total", status="rejected", hot="false") == rej
+    assert asyncio.run(h.redis.exists(dedup_key(42, "u1"))) == 0
+
+
+def test_own_wait_expiring_is_ambiguous_and_answers_before_the_gateway_timeout(make_client):
+    h, client = make_client(click_deadline_ms=300)
+    h.producer.delay = 5  # handed to the producer, no ack
+    amb = metric("clicks_total", status="ambiguous", hot="false")
+    res = client.get("/click/42", params={"user_id": "u1"})
+    assert res.status_code == 503 and res.elapsed.total_seconds() < 0.6  # << gateway 2 s
+    assert metric("clicks_total", status="ambiguous", hot="false") == amb + 1
+
+
+def test_definite_failure_is_rejected(make_client):
+    from sdl_common.kafka import DeliveryError
+
+    h, client = make_client()
+    h.producer.fail = DeliveryError("local producer queue full")  # never sent
+    amb = metric("clicks_total", status="ambiguous", hot="false")
+    rej = metric("clicks_total", status="rejected", hot="false")
+    res = client.post("/clicks", json={"ad_id": 42, "user_id": "u1"})
+    assert res.status_code == 503 and "could not be durably recorded" in res.json()["detail"]
+    assert metric("clicks_total", status="rejected", hot="false") == rej + 1
+    assert metric("clicks_total", status="ambiguous", hot="false") == amb
+
+
+def test_saturated_loop_does_not_turn_dedup_off(h):
+    """The dedup bound is the Redis socket timeout, not wall-clock time incl. loop queueing: a
+    claim that is slow only because the loop is busy (here: 120 ms > REDIS_TIMEOUT_MS 50 ms)
+    still dedups instead of failing open."""
+
+    async def run():
+        h.store.claim_delay = 0.12
+        before = metric("click_dedup_failopen_total")
+        first = await h.service.handle(42, "u1", "c1")
+        second = await h.service.handle(42, "u1", "c2")
+        assert (first.status, second.status) == ("accepted", "duplicate")
+        assert metric("click_dedup_failopen_total") == before
+
+    asyncio.run(run())

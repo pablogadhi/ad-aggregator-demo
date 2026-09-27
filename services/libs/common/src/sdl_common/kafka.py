@@ -35,14 +35,40 @@ class KafkaSettings(BaseSettings):
 
 
 class DeliveryError(Exception):
-    """The message was not acknowledged by the broker (error, local queue full, or timeout)."""
+    """The message was not acknowledged by the broker (error, local queue full, or timeout).
+
+    `possibly_persisted` tells a *definite* failure (False: never handed to / never sent by the
+    producer, or rejected by the broker) from an *ambiguous* one (True: the message timed out
+    in flight, or our wait for its report expired, so the broker may still have written it).
+    `error` is librdkafka's KafkaError when the failure came from a delivery report."""
+
+    def __init__(
+        self, message: str, *, error: KafkaError | None = None, possibly_persisted: bool = False
+    ) -> None:
+        super().__init__(message)
+        self.error = error
+        self.possibly_persisted = possibly_persisted
+
+
+# Delivery-report errors after which the broker may have persisted the message (in-flight timeouts,
+# or written to the leader without enough in-sync replicas acking it).
+IN_FLIGHT_ERRORS = frozenset(
+    (
+        KafkaError._MSG_TIMED_OUT,
+        KafkaError._TIMED_OUT,
+        KafkaError.REQUEST_TIMED_OUT,
+        KafkaError.NOT_ENOUGH_REPLICAS_AFTER_APPEND,
+    )
+)
 
 
 def _resolve(fut: asyncio.Future, err: KafkaError | None, msg: Message | None) -> None:
     if fut.done():  # the waiter gave up (timeout / cancelled)
         return
     if err is not None:
-        fut.set_exception(DeliveryError(str(err)))
+        fut.set_exception(
+            DeliveryError(str(err), error=err, possibly_persisted=err.code() in IN_FLIGHT_ERRORS)
+        )
     else:
         fut.set_result(msg)
 
@@ -134,7 +160,8 @@ class AsyncProducer:
         try:
             return await asyncio.wait_for(fut, ack_timeout)
         except TimeoutError as exc:
-            raise DeliveryError(f"no delivery report within {ack_timeout}s") from exc
+            # handed to librdkafka and still owned by it: it may yet be delivered -> ambiguous
+            raise DeliveryError(f"no delivery report within {ack_timeout}s", possibly_persisted=True) from exc
 
     async def check(self, topic: str, metadata_timeout: float = 1.5) -> None:
         """Readiness: cluster metadata for `topic` is reachable and the topic has partitions."""

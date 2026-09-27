@@ -4,7 +4,9 @@ from prometheus_client import Counter, Gauge, Histogram
 
 CLICKS = Counter(
     "clicks_total",
-    "Click requests on a known ad, by outcome (rejected = not durably recorded -> 503)",
+    "Click requests on a known ad, by outcome: accepted, duplicate; 503s: shed (deadline passed "
+    "before producing, definite), rejected (produce failed before/without being sent, definite), "
+    "ambiguous (timed out in flight: may have been persisted)",
     ["status", "hot"],
 )
 UNKNOWN_AD = Counter("click_unknown_ad_total", "Clicks on unknown or inactive ads (404)")
@@ -25,3 +27,9 @@ HOT_REFRESH_ERRORS = Counter("hot_refresh_errors_total", "Failed hot-ad set refr
 HOT_COUNTS_DROPPED = Counter(
     "hot_counter_dropped_total", "Per-ad click counts dropped because the unflushed backlog was full"
 )
+REDIS_SLOT_REFRESHES = Counter(
+    "click_redis_slot_refreshes_total",
+    "Redis Cluster slot-map refreshes of the per-click client (reason: failures|periodic)",
+    ["reason", "result"],
+)
+WARMUP_SECONDS = Gauge("click_warmup_seconds", "Duration of the warm-up before readiness")

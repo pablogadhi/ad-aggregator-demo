@@ -13,6 +13,8 @@ env:
   AD_CACHE_TTL_SECONDS: "60"
   REDIS_TIMEOUT_MS: "50"
   KAFKA_DELIVERY_TIMEOUT_MS: "1500"
+  CLICK_DEADLINE_MS: "1000"          # shed (503, nothing produced) past it; caps the ack wait
+  ACCESS_LOG_SAMPLE: "0.01"          # 1 % of 2xx/3xx access-log lines; errors always logged
   HOT_THRESHOLD_CLICKS_10M: "1200"
   HOT_MARK_TTL_SECONDS: "600"
   HOT_PERMANENT_AFTER_MARKS: "10"

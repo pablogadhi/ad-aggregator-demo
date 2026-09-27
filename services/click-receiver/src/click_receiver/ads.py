@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -26,6 +27,10 @@ class AdSource(Protocol):
 
 
 QUERY = "SELECT id, advertiser_id, redirect_url, active FROM ads WHERE id = %s"
+# warm-up: the newest active ads (bounded) — one query on the read replica
+PRELOAD_QUERY = (
+    "SELECT id, advertiser_id, redirect_url, active FROM ads WHERE active ORDER BY id DESC LIMIT %s"
+)
 
 
 class PostgresAds:
@@ -58,6 +63,19 @@ class PostgresAds:
             return await self._fetch(primary, ad_id)
         except Exception as exc:
             raise AdLookupError(f"ad lookup failed: {type(exc).__name__}: {exc}") from exc
+
+    async def preload(self, limit: int) -> list[Ad]:
+        """Warm-up: up to `limit` active ads, from the replica (the primary if the replica fails)."""
+        last: Exception | None = None
+        for pool in {id(p): p for p in (self.db.replica, self.db.primary)}.values():
+            try:
+                async with pool.connection(timeout=self.timeout) as conn:
+                    cur = await conn.execute(PRELOAD_QUERY, (limit,))
+                    rows = await cur.fetchall()
+                return [Ad(r["id"], r["advertiser_id"], r["redirect_url"], r["active"]) for r in rows]
+            except Exception as exc:  # noqa: BLE001
+                last = exc
+        raise AdLookupError(f"ad preload failed: {type(last).__name__}: {last}") from last
 
     async def check(self) -> None:
         """Readiness: *some* pool answers. Checking only the primary would take every receiver out
@@ -95,6 +113,25 @@ class AdCache:
 
     def __len__(self) -> int:
         return len(self._entries)
+
+    def preload(self, ads: list[Ad]) -> int:
+        """Warm-up: fill the cache (bounded by max_entries). Each entry gets a TTL spread over
+        [ttl/2, ttl] so the preloaded set doesn't expire in one instant and stampede the replica."""
+        now = self.clock()
+        n = 0
+        for ad in ads:
+            if len(self._entries) >= self.max_entries:
+                break
+            self._entries[ad.id] = (now + self.ttl * random.uniform(0.5, 1.0), ad)
+            n += 1
+        return n
+
+    def cached(self, ad_id: int) -> Ad | None:
+        """Synchronous fast path: the cached ad if present and fresh, else None (call get())."""
+        entry = self._entries.get(ad_id)
+        if entry is not None and entry[0] > self.clock():
+            return entry[1]
+        return None
 
     async def get(self, ad_id: int) -> Ad | None:
         entry = self._entries.get(ad_id)

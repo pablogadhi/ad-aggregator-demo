@@ -24,8 +24,13 @@ class FakeProducer:
     def __init__(self):
         self.messages: list[tuple[str, bytes, bytes]] = []
         self.fail: Exception | None = None
+        self.delay = 0.0  # > ack_timeout: the wait expires like AsyncProducer's (bare TimeoutError)
+        self.ack_timeouts: list[float] = []
 
     async def produce(self, topic, value, key=None, *, ack_timeout):
+        self.ack_timeouts.append(ack_timeout)
+        if self.delay:
+            await asyncio.wait_for(asyncio.sleep(self.delay), ack_timeout)
         if self.fail is not None:
             raise self.fail
         self.messages.append((topic, key, value))

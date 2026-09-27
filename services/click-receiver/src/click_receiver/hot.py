@@ -123,8 +123,7 @@ class HotTracker:
             asyncio.create_task(self._loop(self.flush, self.s.hot_flush_interval_ms), name="hot-flush"),
             asyncio.create_task(self._loop(self.refresh, self.s.hot_refresh_interval_ms), name="hot-refresh"),
         ]
-        # learn the current hot set right away instead of salting nothing for the first 2 s
-        self._tasks.append(asyncio.create_task(self.refresh(), name="hot-refresh-initial"))
+        # the initial hot set is loaded by the warm-up (warmup.py) before the pod turns ready
 
     async def stop(self, flush_timeout: float = 3.0) -> None:
         """Graceful shutdown: stop the loops, then flush the last second of counters."""
