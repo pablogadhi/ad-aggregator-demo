@@ -1,0 +1,16 @@
+# Chaos #4: kill one Redis Cluster primary under load.
+# Hypothesis: clicks keep flowing (dedup fails open), click errors < 1 %; click_dedup_failopen_total > 0;
+# the over-count (fail-open duplicates) is bounded and reported by reconcile.js.
+# Primaries move on failover: check first and put a current primary below.
+#   kubectl -n data exec redis-0 -c redis -- redis-cli cluster nodes
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: redis-primary-kill
+  namespace: chaos-mesh
+spec:
+  action: pod-kill
+  mode: one
+  selector:
+    pods:
+      data: [redis-0]

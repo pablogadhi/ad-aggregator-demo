@@ -1,0 +1,16 @@
+# Chaos #3: kill the Flink JobManager under load.
+# Hypothesis: no counts lost (Kubernetes HA + S3 checkpoints): the new JM recovers the job from the latest checkpoint.
+# Verify: reconcile exact; new JM log shows "Restoring job <id> from Checkpoint <n>"; job RUNNING again.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: flink-jm-kill
+  namespace: chaos-mesh
+spec:
+  action: pod-kill
+  mode: one
+  selector:
+    namespaces: [apps]
+    labelSelectors:
+      app: click-aggregator
+      component: jobmanager

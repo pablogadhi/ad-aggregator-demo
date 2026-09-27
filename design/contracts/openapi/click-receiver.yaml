@@ -10,7 +10,9 @@ info:
       3. accepted → produce ClickEvent (contracts/events/clicks.schema.json) to topic `clicks`, key = `ad_id`
          (or `ad_id#salt` when the ad is hot, spec §5.1.1), acks=all + idempotence, and **wait for the ack**
          before answering; accepted clicks feed the batched hot-ad counters in Redis
-      4. produce failure/timeout (≤ 1.5 s) → DEL the dedup key (best effort) → 503, never "accepted"
+      4. produce failure/timeout (≤ 1.5 s, capped by the remaining CLICK_DEADLINE_MS budget) → DEL the dedup key
+         (best effort) → 503, never "accepted". An in-flight timeout is ambiguous (may be persisted).
+      5. deadline passed before producing (load shedding) → 503 without producing
     Every click response (302/200/404/503) carries `X-Click-Id`; 302/200 also carry `X-Click-Status` and
     `X-Click-Hot` (whether the receiver considered the ad hot; the key is salted when hot AND HOT_SALTING_ENABLED).
     Latency target: p95 < 100 ms.

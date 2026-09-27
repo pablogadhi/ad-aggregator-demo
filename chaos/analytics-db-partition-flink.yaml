@@ -1,0 +1,23 @@
+# Chaos #6b: partition the Flink job (JM + TMs) from every analytics-db pod for 60 s under load.
+# Hypothesis: zero click errors; the sink's flushes fail, checkpoints fail/are tolerated or the job restarts,
+# and after the partition heals the counts catch up exactly (reconcile), analytics queries unaffected.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: analytics-db-partition-flink
+  namespace: chaos-mesh
+spec:
+  action: partition
+  mode: all
+  selector:
+    namespaces: [apps]
+    labelSelectors:
+      app: click-aggregator
+  direction: both   # "to" alone misses Service (ClusterIP) traffic; see chaos/README.md
+  target:
+    mode: all
+    selector:
+      namespaces: [data]
+      labelSelectors:
+        cnpg.io/cluster: analytics-db
+  duration: 60s

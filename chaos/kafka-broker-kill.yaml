@@ -1,0 +1,19 @@
+# Chaos #1 (spec §11): kill the Kafka broker leading the most `clicks` partitions under load.
+# Hypothesis: no accepted click is lost (acks=all, minISR 2 of RF 3), click errors < 1 %, p95 recovers < 30 s.
+# Pick the target first (leaders are balanced 4/4/4 by default, so any broker leads ~1/3):
+#   kubectl -n data exec kafka-dual-role-0 -- /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic clicks
+# and put the broker with the most "Leader: <id>" rows below (pod kafka-dual-role-<id>).
+# Run:    k6 run -e BASE_URL=http://localhost:8080 -e SCENARIO=chaos -e RUN=chaos-kafka --out csv=loadtest/results/chaos-kafka.csv loadtest/ad-aggregator.js
+#         (~60 s in) make chaos E=kafka-broker-kill
+# Verify: k6 run -e RUN=chaos-kafka loadtest/reconcile.js (exact), python3 loadtest/timeline.py loadtest/results/chaos-kafka.csv
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: kafka-broker-kill
+  namespace: chaos-mesh
+spec:
+  action: pod-kill
+  mode: one
+  selector:
+    pods:
+      data: [kafka-dual-role-0]

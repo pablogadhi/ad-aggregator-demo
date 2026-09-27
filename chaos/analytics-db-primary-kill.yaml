@@ -1,0 +1,16 @@
+# Chaos #6a: kill the analytics-db primary under load.
+# Hypothesis: the click path is untouched (zero click errors); Flink's JDBC sink retries / restarts from the
+# checkpoint and counts catch up with no loss; analytics queries recover < 60 s.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: analytics-db-primary-kill
+  namespace: chaos-mesh
+spec:
+  action: pod-kill
+  mode: one
+  selector:
+    namespaces: [data]
+    labelSelectors:
+      cnpg.io/cluster: analytics-db
+      cnpg.io/instanceRole: primary

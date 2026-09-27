@@ -1,0 +1,16 @@
+# Chaos #9: kill every Redis pod during the hot-ad load (SCENARIO=chaos HOT=1).
+# Hypothesis: clicks keep flowing (fail open, errors < 1 %); the hot ad stays salted from the receivers'
+# last known set (X-Click-Hot: true, metric hot_ad_clicks_hot); after the cluster re-forms, markings resume
+# (/api/click-receiver/hot-ads refreshed_at advances; hot:* keys are rebuilt).
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: redis-all-kill
+  namespace: chaos-mesh
+spec:
+  action: pod-kill
+  mode: all
+  selector:
+    namespaces: [data]
+    labelSelectors:
+      app.kubernetes.io/name: redis

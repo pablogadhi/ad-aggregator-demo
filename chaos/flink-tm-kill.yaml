@@ -1,0 +1,17 @@
+# Chaos #2: kill one Flink TaskManager under load.
+# Hypothesis: no counts lost (restore from the last S3 checkpoint + idempotent upserts), freshness recovers < 2 min.
+# Verify: reconcile exact; `kubectl -n apps get flinkdeployment click-aggregator` back to RUNNING/STABLE;
+#         JM log "Restoring job ... from Checkpoint"; consumer lag (Prometheus kafka_consumergroup_lag{consumergroup="click-aggregator"}).
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: flink-tm-kill
+  namespace: chaos-mesh
+spec:
+  action: pod-kill
+  mode: one
+  selector:
+    namespaces: [apps]
+    labelSelectors:
+      app: click-aggregator
+      component: taskmanager

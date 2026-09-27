@@ -45,7 +45,7 @@ Kafka, and a Flink job aggregates them into per-minute counts in a separate anal
 | ------------------------------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | ~100M clicks/day (~1.2k rps avg, ~10k peak) | 500 rps sustained for 5 min, 1,000 rps burst for 1 min                 | same path: gateway → N receivers → keyed Kafka partitions → parallel Flink → upserts. k6 measures p95 and loss.        |
 | 10M active ads                              | 2,000 ads across 100 advertisers, created by the load test's setup     | enough keys to spread over all partitions; in-process ad cache hit rate stays realistic (hot set ≪ total)               |
-| Click Receiver pool                         | `click-receiver` HPA 3–9 replicas (CPU), spread over zones             | zone loss removes a third of capacity; scale-out is observable under the burst                                         |
+| Click Receiver pool                         | `click-receiver` HPA 4–18 replicas (CPU), spread over zones            | zone loss removes a third of capacity; scale-out is observable under the burst                                         |
 | Kafka cluster (3 brokers, N partitions)     | 3 brokers (one per zone), topic `clicks` 12 partitions, RF 3, minISR 2 | a broker can die with no loss (`acks=all`); 12 partitions = headroom for Flink to scale to 12 source subtasks           |
 | Flink cluster, N aggregators                | 1 JobManager + 3–12 TaskManagers × 1 slot (operator autoscaler)        | same scale-out mechanism as prod (lag/busy-time driven rescale from a checkpoint); TM/JM kill exercises recovery       |
 | hot ads (viral ad)                          | one ad receiving 20 % of the load (100 rps); threshold 1,200 clicks/10 min | same skew; salting spreads it over partitions, measurable per partition                                             |
@@ -105,8 +105,10 @@ credentials) to the postgres contract (for Flink). Document `instance` in `AUTHO
 | analytics        | FastAPI, public (JWT)      | time-series queries over `click_counts` per ad / per advertiser with minute/hour/day rollups                       | `contracts/openapi/analytics.yaml` at `/api/analytics`    | —        | —                | `analytics-db` (owns `contracts/db/analytics-db.sql`) |
 | click-aggregator | pipeline (Flink)           | consume `clicks`, two-stage count per `(ad_id, salt, minute)` → `(ad_id, minute)`, upsert into `analytics-db.click_counts`; autoscaled | —                                                         | `clicks` | —                | `analytics-db`; state in S3             |
 
-Replicas: click-receiver HPA min 3 / max 9 (`autoscaling.targetCPU` ~500m), others 2 (chart spreads
-across zones, PDB).
+Replicas: click-receiver HPA **min 4 / max 18** (`autoscaling.targetCPU` ~500m; one uvicorn process
+tops out at ~1 core ≈ 170–190 clicks/s measured, so 2,000 rps with headroom needs ~15 pods), others
+2 (chart spreads across zones, PDB). The per-click CPU cost is worth profiling (per-request JSON
+access logs, JSON encoding, event loop implementation) before adding pods.
 
 ### 5.1 click-receiver — the hot path
 
@@ -119,19 +121,36 @@ across zones, PDB).
    no hash tag, so a viral ad's dedup keys spread over all shards).
    - key existed → `duplicate`: redirect, **don't** produce.
    - Redis error/timeout → **fail open**: treat as new (availability + no loss beats exact dedup);
-     count it in metric `click_dedup_failopen_total`.
+     count it in metric `click_dedup_failopen_total`. The 50 ms bound is a Redis socket/IO timeout,
+     not a wall-clock bound that includes event-loop queueing; a saturated receiver still dedups
+     (it is shed by the deadline below instead). After repeated timeouts to one Redis node the
+     client must refresh the cluster slot map (a silently dead primary gets failed over, and the
+     receiver must follow within seconds, not wait for the node to return).
 4. Produce `ClickEvent` (§6) to `clicks`, key = `ad_id`, or `ad_id#salt` for a hot ad (§5.1.1),
    producer `acks=all`,
    `enable.idempotence=true`, delivery timeout ≤ 1.5 s; **await the delivery report**.
    - ack → `accepted`: 302 / 200.
-   - failure/timeout → best-effort `DEL` of the dedup key, then **503** (no redirect). The click
-     wasn't recorded, and the client may retry. Never answer `accepted` without an ack.
+   - failure/timeout → best-effort `DEL` of the dedup key, then **503** (no redirect); the client
+     may retry. Never answer `accepted` without an ack.
+   - **Outcomes are either definite or ambiguous.** A produce that fails *before* being sent is a
+     definite "not recorded". A produce that times out *in flight* is **ambiguous**: the broker may
+     have persisted it. Both answer 503, and ambiguous ones are counted in
+     `clicks_total{status="ambiguous"}`. The same applies to a gateway 504 (the receiver was still
+     working).
+   - **Deadline / load shedding:** `CLICK_DEADLINE_MS` (1,000 ms) is measured from when the receiver
+     starts handling the request. If it has passed before the produce step, answer 503 **without
+     producing** (definite, `status="shed"`). The produce's delivery timeout is capped by the
+     remaining budget, so the receiver always answers before the gateway's 2 s timeout and a click
+     whose client was told "failed" is ambiguous only in the rare in-flight case.
 5. Response headers on every click response: `X-Click-Status: accepted | duplicate`,
    `X-Click-Id: <uuid>` (for duplicates: the new request's id), `X-Click-Hot: true | false` (the
    receiver's view when it handled the click). Metrics: counters
    `clicks_total{status="accepted|duplicate|rejected", hot="true|false"}`.
 6. Readiness: Kafka metadata reachable + Postgres reachable. Redis is **not** in readiness
-   (it fails open).
+   (it fails open). **Warm-up before ready:** a new pod connects the producer (metadata for
+   `clicks` fetched), connects Redis, preloads the active ads into the cache (bounded, e.g. 50k), and
+   loads the hot set before `/readyz` turns green, so a pod added by the HPA mid-burst serves
+   its first request warm.
 
 ### 5.1.1 click-receiver — hot-ad detection and salting **(decided)**
 
@@ -313,12 +332,13 @@ Setup: 100 advertisers × 20 ads (via the API), a viewer token and advertiser to
 | `hot-ad`  | same as `clicks`, but 20 % of requests go to one ad (`S=… -e SCENARIO=hot`); run twice: `HOT_SALTING_ENABLED=true` vs `false` | ad marked hot < 30 s after start; with salting, max/min per-partition message rate of `clicks` (Kafka exporter / partition offsets) < 2×, and without it the hot partition is visibly skewed (report both); p95 < 100 ms; reconciliation exact |
 | `scale`   | ramp 200 → 2,000 rps over 10 min, hold 5 min                            | report: click-receiver HPA replicas, Flink parallelism over time (`kubectl get flinkdeployment -o yaml` / JM REST), consumer lag peak, analytics-db write rate. Pass = no data loss (reconciliation exact) and lag drains after the ramp; latency numbers are findings, not gates |
 | `queries` | 20 rps per-advertiser and per-ad queries (last 60 min, minute)         | p95 < 500 ms, errors < 0.1 %                                                                |
-| teardown  | reconciliation: sum of `accepted` counted by k6 (per advertiser) vs. analytics totals for those advertisers, polled until equal or 90 s | exact match; report reconciliation lag |
+| teardown  | reconciliation: sum of `accepted` counted by k6 (per advertiser) vs. analytics totals for those advertisers, polled until they match or 90 s | **lost = 0** (analytics ≥ k6 accepted for every advertiser) and **over-count ≤ ambiguous responses** (non-2xx/302 answers: 503s + gateway 504s/timeouts); report lag, over-count and ambiguous count |
 
 ## 11. Chaos experiments (→ `chaos/`)
 
 Each runs under the `clicks` load (reduced to 300 rps, 5 min) and ends with reconciliation
-(k6 accepted == analytics total) and `make e2e`.
+(lost = 0 and over-count ≤ ambiguous responses, §10) and `make e2e`. "reconciliation exact" below
+means exactly that.
 
 | # | Hypothesis                                                                                  | Fault                                                     | Verification                                                                                   |
 | - | ------------------------------------------------------------------------------------------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
@@ -349,8 +369,12 @@ Each runs under the `clicks` load (reduced to 300 rps, 5 min) and ends with reco
 - "Aggregated data is de-aggregated and stored" (data flow step 4) is read as "per-minute
   aggregates are stored and rolled up at query time".
 - A click during a Kafka outage returns 503 rather than redirecting: the loss is visible, never
-  silent. A 503 after an ack *timeout* may still have been written, so a client retry can
-  over-count (with dedup fail-open, the only over-count paths; no path loses an accepted click).
+  silent. A 503 after an in-flight produce timeout (or a gateway 504) is **ambiguous**: it may have
+  been written, so it may be counted even though the client was told it failed (and a client retry
+  would count it again). This is inherent without end-to-end idempotency keys (the next experiment:
+  client-supplied click ids + dedup on `click_id` in Flink). Hence the reconciliation criterion is
+  lost = 0 and over-count ≤ ambiguous responses; load shedding (§5.1) keeps ambiguous answers rare.
+  Dedup fail-open duplicates are answered `accepted`, so they don't show up as a mismatch.
 - `click_counts.updated_at` is the Flink processing time of the last change (the JDBC upsert can't
   express `now()`); close enough for the freshness display.
 - Hot-ad salting **(decided)**: threshold 1,200 accepted clicks per 10 min (lab value; the uniform
