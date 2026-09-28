@@ -64,7 +64,7 @@ Kafka, and a Flink job aggregates them into per-minute counts in a separate anal
 | redis                     | ha      | new    | `redis-conn` → `REDIS_URL`, `REDIS_MODE` (`cluster` in ha, `standalone` in small), `REDIS_HOST`, `REDIS_PORT`                           | —                                                                         |
 | aws (Floci S3)            | small   | new    | `aws-conn` → `AWS_ENDPOINT_URL`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` **(decided)**                                | bucket `flink-state` (Job)                                                |
 | flink (operator)          | small   | new    | `flink-conn` → `FLINK_REST_URL` (unused by services)                                                                                    | operator watches namespace `apps`; job autoscaler available (built into the operator) |
-| — (design)                | —       | —      | `jwt-conn` → `JWT_PRIVATE_KEY_PEM`, `JWT_PUBLIC_KEY_PEM`, `JWT_KID`, `JWT_ISSUER`, `JWT_AUDIENCE`                                                             | RSA keypair generated at `make up`; Envoy `SecurityPolicy` (see §4.2)     |
+| — (design)                | —       | —      | `jwt-conn` → `JWT_PRIVATE_KEY_PEM`, `JWT_KID`, `JWT_ISSUER`, `JWT_AUDIENCE`                                                                                    | RSA keypair generated at `make up`; Envoy `SecurityPolicy` (see §4.2)     |
 
 ### 4.1 Multiple instances of one component **(decided)**
 
@@ -81,9 +81,9 @@ credentials) to the postgres contract (for Flink). Document `instance` in `AUTHO
 
 - Envoy Gateway `SecurityPolicy` with a JWT provider on the HTTPRoutes **`ad-placement`** and
   **`analytics`** (the chart names the route after the release). Tokens are RS256, `iss` =
-  `JWT_ISSUER` (`ad-aggregator-auth`), `aud` = `JWT_AUDIENCE` (`ad-aggregator`). JWKS: the public key
-  of the keypair in `jwt-conn` (inline/local JWKS, or remote JWKS from `auth`'s
-  `/.well-known/jwks.json`, whichever the pinned Envoy Gateway version supports reliably).
+  `JWT_ISSUER` (`ad-aggregator-auth`), `aud` = `JWT_AUDIENCE` (`ad-aggregator`). JWKS: **remote JWKS**
+  fetched by the gateway from `auth`'s `/.well-known/jwks.json` (in-cluster, via `backendRefs`), so
+  nothing has to derive a JWKS at install time; until `auth` is up, JWT routes answer 401.
 - `claimToHeaders`: `sub` → `X-Auth-Sub`, `role` → `X-Auth-Role`, `advertiser_id` →
   `X-Auth-Advertiser-Id`. Every token carries all three claims (strings), so the gateway always
   overwrites client-supplied copies of these headers; the smoke test must prove a spoofed

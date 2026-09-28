@@ -10,14 +10,16 @@ back into the template (`scripts/harvest-component.sh`) so the next design reuse
 
 ```
 infra/components/<name>/
-├── install.sh        # usage: install.sh <profile> [instance] — idempotent; installs operator + instance + conn secret
-├── uninstall.sh      # usage: uninstall.sh [instance] — removes the instance (and its data); operators may stay
+├── install.sh        # usage: install.sh <profile> [instance] — idempotent; only pinned `helm_install` calls:
+│                     #   operator release (if any) → glue release → instance release
+├── uninstall.sh      # usage: uninstall.sh [instance] — helm uninstall the instance + glue; operators may stay
 ├── smoke.sh          # usage: smoke.sh [instance] — proves real behaviour; exit non-zero on failure
-├── README.md         # what it is, profiles, connection contract, experiments worth running
-├── profiles/
-│   ├── small/        # kustomize overlay (or small.yaml helm values) — minimum footprint
-│   └── ha/           # replicated across zones — for failure experiments
-└── base/             # shared manifests (kustomize) — or values/ for helm-only components
+├── README.md         # what it is, charts + versions, profiles, connection contract, experiments
+└── values/
+    ├── operator.yaml # values for the upstream operator chart (if any)
+    ├── small.yaml    # instance chart values — minimum footprint
+    ├── ha.yaml       # instance chart values — replicated across zones, for failure experiments
+    └── glue.yaml     # bedag/raw values: the `<instance>-conn` secret and any CRs no chart provides
 ```
 
 Name: lower-kebab, the technology (`kafka`, `redis`, `elasticsearch`, `flink`, `temporal`, `aws`).
@@ -33,8 +35,13 @@ Name: lower-kebab, the technology (`kafka`, `redis`, `elasticsearch`, `flink`, `
 4. **Placement:** replicated profiles spread over `topology.kubernetes.io/zone` (topologySpreadConstraints
    or the operator's rack/zone awareness). Set requests/limits on everything. Budget: a whole design on
    `small` profiles must fit Docker's 12 GiB minimum (`make doctor`); `ha` may assume ~16 GiB.
-5. **No Bitnami** charts/images (moved to a legacy, unmaintained catalog in 2025). Prefer the upstream
-   operator (see PLAYBOOK.md), then official images.
+5. **Install from existing charts on Artifact Hub — no local charts, no `kubectl apply`.** Prefer the
+   upstream project's own chart/operator, then a maintained community chart that runs official images.
+   Anything no chart provides (the conn secret, CRs such as `Kafka`, generated credentials) goes in a
+   **`bedag/raw`** release named `<instance>-glue` (`values/glue.yaml`; its `templates:` run through `tpl`,
+   so `.Release.Name`, `lookup`, `randAlphaNum`, `genPrivateKey` work — use `lookup` to keep generated
+   values stable across upgrades). The release name is the instance. **No Bitnami** charts/images (moved
+   to a legacy, unmaintained catalog in Aug 2025).
 6. **Metrics:** if the component exposes Prometheus metrics, add a ServiceMonitor/PodMonitor (any
    namespace is scraped). Grafana dashboards: ConfigMap labelled `grafana_dashboard: "1"`.
 7. **UI (optional):** expose tool UIs host-based through the gateway, e.g. `kafka-ui.localhost` —

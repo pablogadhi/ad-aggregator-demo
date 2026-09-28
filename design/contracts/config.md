@@ -11,10 +11,10 @@ Which connection contracts and env vars each workload gets (written by the archi
 | `postgres-conn`     | postgres component, instance `postgres`       | `HOST READ_HOST PORT USER PASSWORD DATABASE URL READ_URL JDBC_URL`                     |
 | `analytics-db-conn` | postgres component, instance `analytics-db`   | same keys; hosts `analytics-db-rw/-ro.data.svc.cluster.local`, database `app`          |
 | `kafka-conn`        | kafka component                               | `BOOTSTRAP_SERVERS`                                                                    |
-| `redis-conn`        | redis component                               | `URL` (`redis://…`), `MODE` (`cluster` for ha, `standalone` for small), `HOST`, `PORT` |
+| `redis-conn`        | redis component (CloudPirates `redis` chart, `extraObjects`) | `URL` (`redis://…`), `MODE` (`cluster` for ha, `standalone` for small), `HOST`, `PORT` (hosts are the chart's Service names) |
 | `aws-conn`          | aws component (Floci)                         | `ENDPOINT_URL`, `REGION`, `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY`                         |
 | `flink-conn`        | flink component                               | `REST_URL`                                                                             |
-| `jwt-conn`          | `infra/design/` (keypair generated at `make up`, stable across re-runs) | `PRIVATE_KEY_PEM`, `PUBLIC_KEY_PEM`, `KID`, `ISSUER` (`ad-aggregator-auth`), `AUDIENCE` (`ad-aggregator`) |
+| `jwt-conn`          | `infra/design/` glue release (`genPrivateKey` + `lookup`: generated once, stable across re-runs) | `PRIVATE_KEY_PEM`, `KID`, `ISSUER` (`ad-aggregator-auth`), `AUDIENCE` (`ad-aggregator`) |
 
 `JDBC_URL` = `jdbc:postgresql://<HOST>:5432/app` (no credentials; pass `USER`/`PASSWORD` separately).
 
@@ -33,6 +33,6 @@ Which connection contracts and env vars each workload gets (written by the archi
 
 | Target HTTPRoute (ns `apps`) | Policy                                                                                                   |
 | ---------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `ad-placement`, `analytics`  | `SecurityPolicy` JWT (RS256, iss/aud above), `claimToHeaders`: `sub`→`X-Auth-Sub`, `role`→`X-Auth-Role`, `advertiser_id`→`X-Auth-Advertiser-Id` |
+| `ad-placement`, `analytics`  | `SecurityPolicy` JWT (RS256, iss/aud above, remote JWKS from `http://auth.apps.svc.cluster.local/.well-known/jwks.json`), `claimToHeaders`: `sub`→`X-Auth-Sub`, `role`→`X-Auth-Role`, `advertiser_id`→`X-Auth-Advertiser-Id` |
 | `click-receiver`             | `BackendTrafficPolicy`: timeout 2 s, no retries                                                          |
 | `auth`, `client`             | none                                                                                                     |
