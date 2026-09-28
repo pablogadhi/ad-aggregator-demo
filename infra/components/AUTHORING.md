@@ -35,8 +35,9 @@ Name: lower-kebab, the technology (`kafka`, `redis`, `elasticsearch`, `flink`, `
 4. **Placement:** replicated profiles spread over `topology.kubernetes.io/zone` (topologySpreadConstraints
    or the operator's rack/zone awareness). Set requests/limits on everything. Budget: a whole design on
    `small` profiles must fit Docker's 12 GiB minimum (`make doctor`); `ha` may assume ~16 GiB.
-5. **Install from existing charts on Artifact Hub — no local charts, no `kubectl apply`.** Prefer the
-   upstream project's own chart/operator, then a maintained community chart that runs official images.
+5. **Install from existing charts on Artifact Hub, no `kubectl apply`.** Prefer the upstream project's
+   own chart/operator, then a maintained community chart that runs official images; write chart code only
+   when Artifact Hub has nothing suitable.
    Anything no chart provides (the conn secret, CRs such as `Kafka`, generated credentials) goes in a
    **`bedag/raw`** release named `<instance>-glue` (`values/glue.yaml`; its `templates:` run through `tpl`,
    so `.Release.Name`, `lookup`, `randAlphaNum`, `genPrivateKey` work — use `lookup` to keep generated
