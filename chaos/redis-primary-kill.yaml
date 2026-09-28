@@ -13,4 +13,4 @@ spec:
   mode: one
   selector:
     pods:
-      data: [redis-0]
+      data: [redis-3]
