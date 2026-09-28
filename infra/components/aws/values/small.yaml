@@ -1,0 +1,23 @@
+# quench floci values — small: single pod with persistent storage (matches the previous Floci 2.1.0
+# Deployment+PVC setup). The chart already pins the hardened image by digest
+# (ghcr.io/quenchworks/images/floci@sha256:..., human tag "2.1.0" — today's version) — don't override
+# image:, that digest IS the pin (see README "image pinning").
+fullnameOverride: aws   # Service/Deployment named "aws" -> endpoint stays aws.data.svc.cluster.local:4566
+
+floci:
+  storage:
+    mode: persistent   # flush every write to disk -> buckets/objects/queues survive pod restarts
+
+persistence:
+  enabled: true
+  size: 5Gi
+
+resources:
+  requests: { cpu: 100m, memory: 256Mi }
+  limits: { memory: 1Gi }
+
+# Clients live in namespace apps, Floci runs in data — open ingress to the whole cluster (still
+# restricted to this Service's port; the chart's default only allows same-namespace pods).
+networkPolicy:
+  enabled: true
+  allowExternal: true

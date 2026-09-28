@@ -1,25 +1,22 @@
 #!/usr/bin/env bash
-# usage: install.sh [small]   — Floci AWS emulator (S3, SQS, DynamoDB, …) + apps/aws-conn
+# usage: install.sh [small]   — Floci AWS emulator (quench floci chart) + aws-glue (apps/aws-conn)
 # (a second arg — the stack.yaml instance — is accepted but must be "aws")
 source "$(dirname "$0")/../../../scripts/lib.sh"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PROFILE=${1:-small}
 INSTANCE=${2:-aws}
-# image pinned in base/floci.yaml: floci/floci:2.1.0
 
-[ -d "$HERE/profiles/$PROFILE" ] || die "aws: unknown profile '$PROFILE' (only 'small')"
+FLOCI_CHART=oci://ghcr.io/quenchworks/charts/floci
+FLOCI_CHART_VERSION=0.2.18   # appVersion 2.1.0; image pinned by DIGEST in the chart (ghcr.io/quenchworks/images/floci)
+RAW_CHART_VERSION=2.0.2      # bedag/raw (glue: apps/aws-conn)
+
+[ -f "$HERE/values/$PROFILE.yaml" ] || die "aws: unknown profile '$PROFILE' (only 'small')"
 [ "$INSTANCE" = aws ] || die "aws: only one instance (named 'aws') is supported, got '$INSTANCE'"
 
-log "aws: applying profile '$PROFILE' (Floci)"
-kc apply -k "$HERE/profiles/$PROFILE" >/dev/null
-kc -n data rollout status deploy/aws --timeout=300s >/dev/null
+helm_repo bedag https://bedag.github.io/helm-charts
+helm repo update bedag >/dev/null
 
-# Connection contract: Secret aws-conn in namespace apps. Credentials are dummies (Floci doesn't check them).
-kc -n apps create secret generic aws-conn \
-  --from-literal=ENDPOINT_URL=http://aws.data.svc.cluster.local:4566 \
-  --from-literal=REGION=us-east-1 \
-  --from-literal=ACCESS_KEY_ID=test \
-  --from-literal=SECRET_ACCESS_KEY=test \
-  --dry-run=client -o yaml | kc label --local -f - sdl.dev/conn=true -o yaml | kc apply -f - >/dev/null
+helm_install aws "$FLOCI_CHART" "$FLOCI_CHART_VERSION" data -f "$HERE/values/$PROFILE.yaml"
+helm_install aws-glue bedag/raw "$RAW_CHART_VERSION" apps -f "$HERE/values/glue.yaml"
 
 ok "aws ($PROFILE) ready — secret apps/aws-conn"

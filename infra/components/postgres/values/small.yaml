@@ -1,0 +1,30 @@
+# cnpg/cluster values — small: single instance, no replicas, no failover.
+# install.sh sets fullnameOverride=<instance> and cluster.initdb.secret.name=<instance>-app-credentials.
+type: postgresql
+version:
+  postgresql: "18"
+cluster:
+  instances: 1
+  imageName: ghcr.io/cloudnative-pg/postgresql:18.4-system-trixie   # operator 1.30.0 default, pinned
+  imagePullPolicy: IfNotPresent
+  enableSuperuserAccess: false
+  storage:
+    size: 2Gi
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 512Mi }
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: topology.kubernetes.io/zone
+    podAntiAffinityType: preferred
+  initdb:
+    database: app
+    owner: app
+  postgresql:
+    parameters:
+      max_connections: "200"
+      shared_buffers: 64MB
+  monitoring:
+    enabled: true
+    podMonitor: { enabled: true }
+    prometheusRule: { enabled: false }

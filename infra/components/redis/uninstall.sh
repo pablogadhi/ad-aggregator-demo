@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Removes Redis and its data (PVCs), so a re-install bootstraps a fresh cluster.
+# usage: uninstall.sh [instance]  — removes that Redis release and its data (PVC retention policy
+# whenDeleted: Delete), so a re-install forms a fresh cluster.
 source "$(dirname "$0")/../../../scripts/lib.sh"
-kc -n apps delete secret redis-conn --ignore-not-found >/dev/null
-kc -n data delete statefulset/redis service/redis service/redis-headless configmap/redis-config podmonitor/redis pdb/redis --ignore-not-found --wait >/dev/null
-kc -n data delete pvc -l app.kubernetes.io/name=redis --ignore-not-found >/dev/null
-ok "redis removed"
+INSTANCE=${1:-redis}
+helm uninstall "$INSTANCE" --kube-context "$SDL_CLUSTER" -n data --wait --ignore-not-found >/dev/null
+kc -n data delete pvc -l "app.kubernetes.io/instance=$INSTANCE,app.kubernetes.io/name=redis" --ignore-not-found >/dev/null
+ok "redis instance $INSTANCE removed"

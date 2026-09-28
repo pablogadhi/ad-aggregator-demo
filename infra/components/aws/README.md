@@ -1,9 +1,22 @@
 # aws (Floci AWS emulator)
 
-[Floci](https://github.com/floci-io/floci) **2.1.0** (`floci/floci:2.1.0`, MIT, no account/token):
-a LocalStack-compatible AWS emulator (S3, SQS, SNS, DynamoDB, …) on port 4566. One Deployment
-(`data/aws`, strategy `Recreate`) with a 5Gi PVC and `FLOCI_STORAGE_MODE=persistent` (every write is
-flushed to the volume, so buckets/objects survive pod restarts). 100m / 256Mi request, 1Gi limit.
+[Floci](https://github.com/floci-io/floci) **2.1.0**, installed from the quench community chart
+**`floci` 0.2.18** (OCI `oci://ghcr.io/quenchworks/charts/floci`, Artifact Hub, MIT, no
+account/token): a LocalStack-compatible AWS emulator (S3, SQS, SNS, DynamoDB, …) on port 4566.
+Release `aws` (namespace `data`), `fullnameOverride: aws` so the Deployment/Service keep the name
+`aws` (endpoint unchanged: `http://aws.data.svc.cluster.local:4566`). `floci.storage.mode:
+persistent` + a 5Gi PVC (every write flushed to disk, buckets/objects survive pod restarts). 100m /
+256Mi request, 1Gi limit. `apps/aws-conn` comes from a second release, `aws-glue` (`bedag/raw`
+2.0.2) — the chart itself has no `extraObjects`.
+
+**Image pinning:** the chart's default `image.repository: ghcr.io/quenchworks/images/floci` is
+already pinned by **digest** (`sha256:4b39fd37…`), with `tag: "2.1.0"` kept only as a human label —
+this matches today's Floci version, so `values/small.yaml` doesn't override `image:` at all; the
+chart's own pin **is** the pin. (Not the same registry as the previous `floci/floci:2.1.0` Docker
+Hub image, but the same upstream release.)
+
+**Network policy:** the chart defaults to same-namespace-only ingress; since clients live in `apps`
+and Floci runs in `data`, `values/small.yaml` sets `networkPolicy.allowExternal: true`.
 
 One instance per design (`install.sh small [aws]`; any other instance name fails fast).
 
@@ -11,7 +24,7 @@ One instance per design (`install.sh small [aws]`; any other instance name fails
 
 | Profile | What                        |
 | ------- | --------------------------- |
-| `small` | 1 pod + PVC (the only one — an emulator has no meaningful HA) |
+| `small` | 1 pod + PVC (the only one — an emulator has no meaningful HA; the chart's `replicaCount` must stay 1 with persistent storage since each replica would hold its own state) |
 
 ## Connection contract — Secret `apps/aws-conn`
 

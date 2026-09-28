@@ -1,0 +1,131 @@
+# bedag/raw values for release platform-glue (namespace envoy-gateway-system), installed AFTER eg
+# (needs the Gateway API CRDs that chart installs). Moves the previous gateway.yaml/routes.yaml
+# `kubectl apply` (GatewayClass/Gateway/EnvoyProxy, the Envoy PodMonitor, the tool-UI HTTPRoutes)
+# into a helm release — infra/platform/install.sh has no kubectl apply left.
+#
+# Single entry point into the cluster: http://localhost:8080
+#   - app traffic:   path-based on any host          (http://localhost:8080/api/<service>/...)
+#   - tool UIs:      host-based on *.localhost        (http://grafana.localhost:8080)
+# Envoy Gateway also plays the "API Gateway" box from design diagrams: rate limiting, JWT auth,
+# retries/timeouts are configured per route with BackendTrafficPolicy / SecurityPolicy (design-owned).
+resources:
+  - apiVersion: gateway.envoyproxy.io/v1alpha1
+    kind: EnvoyProxy
+    metadata:
+      name: sdl-proxy
+      namespace: envoy-gateway-system
+    spec:
+      provider:
+        type: Kubernetes
+        kubernetes:
+          envoyDeployment:
+            replicas: 2
+            pod:
+              topologySpreadConstraints:
+                - maxSkew: 1
+                  topologyKey: topology.kubernetes.io/zone
+                  whenUnsatisfiable: ScheduleAnyway
+                  labelSelector:
+                    matchLabels:
+                      gateway.envoyproxy.io/owning-gateway-name: sdl
+          envoyService:
+            type: NodePort
+            # Cluster policy: the NodePort is mapped on the control-plane node, where no envoy pod runs.
+            externalTrafficPolicy: Cluster
+            patch:
+              type: StrategicMerge
+              value:
+                spec:
+                  ports:
+                    - port: 80
+                      nodePort: 30080
+
+  - apiVersion: gateway.networking.k8s.io/v1
+    kind: GatewayClass
+    metadata:
+      name: sdl
+    spec:
+      controllerName: gateway.envoyproxy.io/gatewayclass-controller
+      parametersRef:
+        group: gateway.envoyproxy.io
+        kind: EnvoyProxy
+        name: sdl-proxy
+        namespace: envoy-gateway-system
+
+  - apiVersion: gateway.networking.k8s.io/v1
+    kind: Gateway
+    metadata:
+      name: sdl
+      namespace: envoy-gateway-system
+    spec:
+      gatewayClassName: sdl
+      listeners:
+        - name: http
+          protocol: HTTP
+          port: 80
+          allowedRoutes:
+            namespaces:
+              from: All
+
+  # Scrape the Envoy proxies' own stats (admin port 19001, container port name "metrics") so
+  # envoy_cluster_upstream_rq_total / envoy_http_downstream_rq_* etc. show up in Prometheus —
+  # without this there was no way to diagnose the 503/504s during the zone-b outage (chaos #7).
+  - apiVersion: monitoring.coreos.com/v1
+    kind: PodMonitor
+    metadata:
+      name: envoy-proxy
+      namespace: envoy-gateway-system
+    spec:
+      selector:
+        matchLabels:
+          app.kubernetes.io/name: envoy
+          app.kubernetes.io/component: proxy
+      podMetricsEndpoints:
+        - path: /stats/prometheus
+          port: metrics
+
+  # Tool UIs, host-based. *.localhost resolves to 127.0.0.1 in browsers and curl.
+  - apiVersion: gateway.networking.k8s.io/v1
+    kind: HTTPRoute
+    metadata:
+      name: grafana
+      namespace: monitoring
+    spec:
+      parentRefs:
+        - name: sdl
+          namespace: envoy-gateway-system
+      hostnames: ["grafana.localhost"]
+      rules:
+        - backendRefs:
+            - name: kps-grafana
+              port: 80
+
+  - apiVersion: gateway.networking.k8s.io/v1
+    kind: HTTPRoute
+    metadata:
+      name: prometheus
+      namespace: monitoring
+    spec:
+      parentRefs:
+        - name: sdl
+          namespace: envoy-gateway-system
+      hostnames: ["prometheus.localhost"]
+      rules:
+        - backendRefs:
+            - name: kps-prometheus
+              port: 9090
+
+  - apiVersion: gateway.networking.k8s.io/v1
+    kind: HTTPRoute
+    metadata:
+      name: chaos-dashboard
+      namespace: chaos-mesh
+    spec:
+      parentRefs:
+        - name: sdl
+          namespace: envoy-gateway-system
+      hostnames: ["chaos.localhost"]
+      rules:
+        - backendRefs:
+            - name: chaos-dashboard
+              port: 2333

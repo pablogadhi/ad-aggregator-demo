@@ -24,6 +24,8 @@ prometheus:
     podMonitorSelectorNilUsesHelmValues: false
     ruleSelectorNilUsesHelmValues: false
     probeSelectorNilUsesHelmValues: false
+    # k6-operator TestRuns write results with `--out experimental-prometheus-rw` (load tests in-cluster).
+    enableRemoteWriteReceiver: true
     resources:
       requests: { cpu: 200m, memory: 512Mi }
       limits: { memory: 3Gi }   # ~600Mi with the sample stack; exporters (kafka, flink, …) add series fast

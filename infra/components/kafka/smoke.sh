@@ -68,4 +68,12 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 done
 [ "$n" -eq 3 ] || die "kafka exporter: expected 3 partition offset series for sdl-smoke, got $n"
 ok "exporter publishes kafka_topic_partition_current_offset per partition"
+
+if kc -n data get deploy/kafka-ui >/dev/null 2>&1; then
+  log "kafka-ui: lists the cluster's topics"
+  kc -n data rollout status deploy/kafka-ui --timeout=120s >/dev/null || die "kafka-ui not ready"
+  out=$(kc get --raw "/api/v1/namespaces/data/services/kafka-ui:80/proxy/api/clusters/kafka/topics" 2>/dev/null || true)
+  echo "$out" | grep -q '"name":"sdl-smoke"' || die "kafka-ui: sdl-smoke not listed via its API: $out"
+  ok "kafka-ui sees topic sdl-smoke (kafka-ui.localhost:8080 through the gateway)"
+fi
 ok "kafka smoke passed"

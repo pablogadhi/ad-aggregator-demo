@@ -1,6 +1,0 @@
-# ha: 3 dual-role (controller + broker) nodes, one per zone, rack-aware. Topics default to RF 3 /
-# minISR 2, so one broker (or zone) can die with acks=all producers still succeeding.
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-resources:
-  - ../../base

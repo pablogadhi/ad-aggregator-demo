@@ -1,0 +1,158 @@
+# bedag/raw values for release `design` (namespace apps) — design-specific infra for ad-aggregator
+# (spec §4, §4.2, §6). `resources:` are plain manifests; `templates:` run through `tpl` (lookup, genPrivateKey).
+resources:
+  # spec §6: topic clicks — 12 partitions (= max Flink source parallelism), RF 3, minISR 2, 24 h retention.
+  - apiVersion: kafka.strimzi.io/v1
+    kind: KafkaTopic
+    metadata:
+      name: clicks
+      namespace: data
+      labels:
+        strimzi.io/cluster: kafka
+    spec:
+      partitions: 12
+      replicas: 3
+      config:
+        min.insync.replicas: 2
+        retention.ms: 86400000
+
+  # spec §6.1: S3 bucket for the click-aggregator's checkpoints + JobManager HA (Floci, via aws-conn).
+  # A hook, so it re-runs on every install/upgrade (idempotent: head-bucket || create-bucket).
+  - apiVersion: batch/v1
+    kind: Job
+    metadata:
+      name: create-buckets
+      namespace: apps
+      annotations:
+        helm.sh/hook: post-install,post-upgrade
+        helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    spec:
+      backoffLimit: 6
+      ttlSecondsAfterFinished: 600
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: aws
+              image: amazon/aws-cli:2.37.4
+              envFrom:
+                - secretRef: { name: aws-conn }
+                  prefix: AWS_          # -> AWS_ENDPOINT_URL, AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+              command: ["sh", "-c"]
+              args:
+                - |
+                  set -e
+                  for b in flink-state; do
+                    aws s3api head-bucket --bucket "$b" 2>/dev/null || aws s3api create-bucket --bucket "$b"
+                    echo "bucket $b ok"
+                  done
+              resources:
+                requests: { cpu: 50m, memory: 64Mi }
+                limits: { memory: 256Mi }
+
+  # spec §4.2 — the API-gateway box. Targets the HTTPRoutes the app chart creates (named after the release);
+  # policies for routes that don't exist yet are accepted and attach once Tilt deploys them.
+  #
+  # JWT at the edge for ad-placement + analytics: RS256 tokens minted by `auth` with the jwt-conn key, verified
+  # against auth's own JWKS endpoint (remote JWKS, fetched in-cluster through backendRefs; EG 1.9 rejects the
+  # deprecated singular backendRef). Verified claims are copied into headers, overwriting anything the client sent.
+  - apiVersion: gateway.envoyproxy.io/v1alpha1
+    kind: SecurityPolicy
+    metadata:
+      name: jwt
+      namespace: apps
+    spec:
+      targetRefs:
+        - { group: gateway.networking.k8s.io, kind: HTTPRoute, name: ad-placement }
+        - { group: gateway.networking.k8s.io, kind: HTTPRoute, name: analytics }
+      jwt:
+        providers:
+          - name: ad-aggregator
+            issuer: ad-aggregator-auth
+            audiences: [ad-aggregator]
+            remoteJWKS:
+              uri: http://auth.apps.svc.cluster.local/.well-known/jwks.json
+              backendRefs:
+                - { group: "", kind: Service, name: auth, port: 80 }
+              cacheDuration: 300s
+              failedRefetchDuration: 5s   # auth not up yet / restarting: retry soon instead of waiting out the cache
+            claimToHeaders:
+              - { claim: sub, header: X-Auth-Sub }
+              - { claim: role, header: X-Auth-Role }
+              - { claim: advertiser_id, header: X-Auth-Advertiser-Id }
+
+  # Passive outlier detection for auth/ad-placement/analytics (chaos #7: a dead pod kept getting ~half the
+  # traffic for minutes because xDS/endpoint updates lagged the node loss). Ejection is driven by Envoy's own
+  # observed connection/5xx failures, so it works even when xDS is late. panicThreshold: 0 disables Envoy's
+  # panic-routing-to-all-hosts fallback, which would otherwise kick in with only 2 backend replicas (1 ejected
+  # == 50% unhealthy) and route to the dead pod anyway; alwaysEjectOneEndpoint guarantees ejection even though
+  # maxEjectionPercent would otherwise round down to 0 hosts with so few endpoints.
+  - apiVersion: gateway.envoyproxy.io/v1alpha1
+    kind: BackendTrafficPolicy
+    metadata:
+      name: resilience
+      namespace: apps
+    spec:
+      targetRefs:
+        - { group: gateway.networking.k8s.io, kind: HTTPRoute, name: auth }
+        - { group: gateway.networking.k8s.io, kind: HTTPRoute, name: ad-placement }
+        - { group: gateway.networking.k8s.io, kind: HTTPRoute, name: analytics }
+      healthCheck:
+        panicThreshold: 0
+        passive:
+          consecutiveGatewayErrors: 3
+          consecutive5XxErrors: 3
+          baseEjectionTime: 30s
+          maxEjectionPercent: 50
+          alwaysEjectOneEndpoint: true
+
+  # click-receiver: fail fast (2 s), never retry at the gateway — a retried click must be visible to the client,
+  # not hidden behind the proxy. Same passive outlier detection as above, merged into this policy (one
+  # BackendTrafficPolicy per route) so dead click-receiver pods get ejected too.
+  - apiVersion: gateway.envoyproxy.io/v1alpha1
+    kind: BackendTrafficPolicy
+    metadata:
+      name: click-receiver
+      namespace: apps
+    spec:
+      targetRefs:
+        - { group: gateway.networking.k8s.io, kind: HTTPRoute, name: click-receiver }
+      timeout:
+        http:
+          requestTimeout: 2s
+      retry:
+        numRetries: 0
+      healthCheck:
+        panicThreshold: 0
+        passive:
+          consecutiveGatewayErrors: 3
+          consecutive5XxErrors: 3
+          baseEjectionTime: 30s
+          maxEjectionPercent: 50
+          alwaysEjectOneEndpoint: true
+
+templates:
+  # Secret apps/jwt-conn: RSA key generated once (genPrivateKey, PKCS#1 PEM), then kept via lookup on every
+  # upgrade. KID = first 16 hex chars of sha256(PEM), so it is stable as long as the key is.
+  # Rotate: kubectl -n apps delete secret jwt-conn && make up, then restart auth.
+  - |
+    {{- $existing := lookup "v1" "Secret" "apps" "jwt-conn" }}
+    {{- $key := "" }}
+    {{- if and $existing (hasKey (default dict $existing.data) "PRIVATE_KEY_PEM") }}
+    {{- $key = index $existing.data "PRIVATE_KEY_PEM" | b64dec }}
+    {{- else }}
+    {{- $key = genPrivateKey "rsa" }}
+    {{- end }}
+    apiVersion: v1
+    kind: Secret
+    metadata:
+      name: jwt-conn
+      namespace: apps
+      labels:
+        sdl.dev/conn: "true"
+    type: Opaque
+    data:
+      PRIVATE_KEY_PEM: {{ $key | b64enc }}
+      KID: {{ sha256sum $key | trunc 16 | b64enc }}
+      ISSUER: {{ "ad-aggregator-auth" | b64enc }}
+      AUDIENCE: {{ "ad-aggregator" | b64enc }}

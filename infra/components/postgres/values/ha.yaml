@@ -1,0 +1,33 @@
+# cnpg/cluster values — ha: 1 primary + 2 async streaming replicas, one per zone (zone anti-affinity).
+# Kill the primary and CNPG promotes a replica.
+# Experiment: synchronous replication (no committed write lost on failover, higher latency):
+#   cluster.postgresql.synchronous: { method: any, number: 1 }
+# install.sh sets fullnameOverride=<instance> and cluster.initdb.secret.name=<instance>-app-credentials.
+type: postgresql
+version:
+  postgresql: "18"
+cluster:
+  instances: 3
+  imageName: ghcr.io/cloudnative-pg/postgresql:18.4-system-trixie   # operator 1.30.0 default, pinned
+  imagePullPolicy: IfNotPresent
+  enableSuperuserAccess: false
+  storage:
+    size: 2Gi
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 512Mi }
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: topology.kubernetes.io/zone
+    podAntiAffinityType: preferred   # prefer one instance per zone; still schedules while a zone is down
+  initdb:
+    database: app
+    owner: app
+  postgresql:
+    parameters:
+      max_connections: "200"
+      shared_buffers: 64MB
+  monitoring:
+    enabled: true
+    podMonitor: { enabled: true }
+    prometheusRule: { enabled: false }

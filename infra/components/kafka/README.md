@@ -3,7 +3,16 @@
 Apache Kafka **4.3.1** managed by the Strimzi operator (**chart/operator 1.2.0**, API
 `kafka.strimzi.io/v1`, image `quay.io/strimzi/kafka:1.2.0-kafka-4.3.1`). KRaft only: one
 `KafkaNodePool` (`dual-role`) whose nodes are both controllers and brokers. Operator in
-`strimzi-system` (watches `data`), cluster `kafka` in `data`.
+`strimzi-system` (watches `data`), cluster `kafka` in `data`. No maintained chart deploys a Strimzi
+cluster, so the `Kafka`/`KafkaNodePool` CRs, the JMX metrics ConfigMap, the PodMonitor, `kafka-conn`
+and the `kafka-ui` HTTPRoute are all `bedag/raw` **2.0.2** `resources:` (release `kafka-glue`) —
+`values/small.yaml` / `values/ha.yaml` are the whole profile, there's no separate instance chart.
+
+| Release (namespace)     | Chart                        | What                                                                 |
+| ------------------------ | ----------------------------- | --------------------------------------------------------------------- |
+| `strimzi` (`strimzi-system`) | `strimzi/strimzi-kafka-operator` 1.2.0 | operator, watches `data`                                     |
+| `kafka-glue` (`data`)    | `bedag/raw` 2.0.2              | `Kafka` + `KafkaNodePool`, `kafka-metrics` ConfigMap, PodMonitor `kafka`, `apps/kafka-conn`, HTTPRoute `kafka-ui` |
+| `kafka-ui` (`data`)      | `kafbat/kafka-ui` 1.6.5 (app v1.5.0) | web UI, points at `kafka-kafka-bootstrap.data:9092`; `KAFKA_UI=false` skips it |
 
 One instance per design (`install.sh <profile> [kafka]`; any other instance name fails fast).
 
@@ -53,6 +62,12 @@ spec: { partitions: 12, replicas: 3, config: { min.insync.replicas: 2, retention
   sum by (partition) (rate(kafka_topic_partition_current_offset{topic="clicks"}[1m]))
   ```
 
+## kafka-ui
+
+`kafka-ui.localhost:8080` (through the gateway, HTTPRoute in `kafka-glue`). Points at
+`kafka-kafka-bootstrap.data.svc.cluster.local:9092` (`auth: disabled` — no login, lab only).
+Skip it with `KAFKA_UI=false ./install.sh <profile>`.
+
 ## Operating it
 
 ```bash
@@ -66,7 +81,8 @@ kubectl -n data exec -it kafka-dual-role-0 -- /opt/kafka/bin/kafka-consumer-grou
 `smoke.sh`: creates `KafkaTopic sdl-smoke` through the topic operator, produces 30 keyed messages
 with `acks=all` and consumes them from namespace `apps` via `kafka-conn`; on `ha` checks that every
 partition has 3 in-sync replicas on brokers in 3 zones with distinct `broker.rack`; checks the
-exporter publishes a per-partition offset series for each partition.
+exporter publishes a per-partition offset series for each partition; if `kafka-ui` is installed,
+checks its API lists `sdl-smoke`.
 
 ## Experiments
 

@@ -1,36 +1,38 @@
 # infra/design/ — design-specific infrastructure (ad-aggregator)
 
 Things that belong to _this design_, not to a reusable component. `make up` runs `install.sh`
-after all components are installed (it is idempotent; re-run freely).
+after all components are installed: one `helm upgrade --install` of **`bedag/raw` 2.0.2** as release
+`design` (namespace `apps`) with `values/glue.yaml` — no local chart code, no `kubectl apply`.
 
-| File                    | What                                                                                                   | Spec  |
-| ----------------------- | ------------------------------------------------------------------------------------------------------ | ----- |
-| `topics.yaml`           | `KafkaTopic clicks`: 12 partitions, RF 3, `min.insync.replicas=2`, `retention.ms=86400000` (24 h)       | §6    |
-| `buckets-job.yaml`      | Job `apps/create-buckets` (aws-cli + `aws-conn`): S3 bucket **`flink-state`** in Floci                  | §6.1  |
-| `install.sh`            | applies the above; creates **Secret `apps/jwt-conn`** once; writes ConfigMap `apps/jwt-jwks`; applies policies | §4.2 |
-| `jwks.py`               | stdlib-only PEM → JWKS / RFC 7638 thumbprint (no host installs)                                         | §4.2  |
-| `gateway-policies.yaml` | `SecurityPolicy jwt` + `BackendTrafficPolicy resilience` + `BackendTrafficPolicy click-receiver`        | §4.2  |
+| In `values/glue.yaml`                 | What                                                                                              | Spec  |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------- | ----- |
+| `KafkaTopic clicks` (ns `data`)       | 12 partitions, RF 3, `min.insync.replicas=2`, `retention.ms=86400000` (24 h)                        | §6    |
+| Job `apps/create-buckets`             | `post-install,post-upgrade` hook (aws-cli + `aws-conn`): S3 bucket **`flink-state`** in Floci      | §6.1  |
+| Secret `apps/jwt-conn`                | RSA key from `genPrivateKey`, kept via `lookup` (see below)                                        | §4.2  |
+| `SecurityPolicy jwt`, 2 × `BackendTrafficPolicy` | gateway policies (below)                                                                 | §4.2  |
 
 ## jwt-conn (Secret in `apps`, label `sdl.dev/conn=true`)
 
-| Key               | Value                                                                       |
-| ----------------- | --------------------------------------------------------------------------- |
-| `PRIVATE_KEY_PEM` | RSA 2048 private key, PKCS#8 PEM (`-----BEGIN PRIVATE KEY-----`)            |
-| `PUBLIC_KEY_PEM`  | SubjectPublicKeyInfo PEM (`-----BEGIN PUBLIC KEY-----`)                      |
-| `KID`             | RFC 7638 SHA-256 JWK thumbprint of the public key (base64url)                |
-| `ISSUER`          | `ad-aggregator-auth`                                                         |
-| `AUDIENCE`        | `ad-aggregator`                                                              |
+| Key               | Value                                                                        |
+| ----------------- | ---------------------------------------------------------------------------- |
+| `PRIVATE_KEY_PEM` | RSA 4096 private key, PKCS#1 PEM (`-----BEGIN RSA PRIVATE KEY-----`, Helm `genPrivateKey "rsa"`) |
+| `KID`             | first 16 hex chars of `sha256sum` of the PEM                                  |
+| `ISSUER`          | `ad-aggregator-auth`                                                          |
+| `AUDIENCE`        | `ad-aggregator`                                                               |
 
-Generated on the first `make up` with `openssl` in a one-shot pod (`alpine/openssl:3.5.8`), then
-**kept** on every re-run. To rotate: `kubectl -n apps delete secret jwt-conn && make up`, then
-restart `auth`. The gateway's JWKS (`ConfigMap apps/jwt-jwks`, key `jwks`) is re-derived from the
-secret on every run, so it can't drift from the signing key.
+Generated on the first install, then **kept** on every upgrade (`lookup` of the existing secret), so
+`KID` never changes across `make up` re-runs. To rotate: `kubectl -n apps delete secret jwt-conn &&
+make up`, then restart `auth`. The gateway no longer needs a copy of the public key: it fetches `auth`'s
+JWKS (derived from this private key), so the two can't drift.
 
 ## Gateway policies (namespace `apps`)
 
 - **`SecurityPolicy jwt`** → HTTPRoutes `ad-placement`, `analytics`. Provider `ad-aggregator`:
-  `issuer: ad-aggregator-auth`, `audiences: [ad-aggregator]`, **local JWKS** from ConfigMap
-  `jwt-jwks` (RS256 key with `kid`), `claimToHeaders`: `sub`→`X-Auth-Sub`, `role`→`X-Auth-Role`,
+  `issuer: ad-aggregator-auth`, `audiences: [ad-aggregator]`, **remote JWKS**
+  `uri: http://auth.apps.svc.cluster.local/.well-known/jwks.json` fetched through
+  `backendRefs: [{group: "", kind: Service, name: auth, port: 80}]` (EG 1.9.1 CEL rule: "BackendRefs must
+  be used, backendRef is not supported"), `cacheDuration: 300s`, `failedRefetchDuration: 5s` (tokens
+  are rejected until auth's JWKS has been fetched once), `claimToHeaders`: `sub`→`X-Auth-Sub`, `role`→`X-Auth-Role`,
   `advertiser_id`→`X-Auth-Advertiser-Id`.
 - **`BackendTrafficPolicy click-receiver`** → HTTPRoute `click-receiver`: `requestTimeout: 2s`,
   `retry.numRetries: 0`, plus the same passive health check as below.

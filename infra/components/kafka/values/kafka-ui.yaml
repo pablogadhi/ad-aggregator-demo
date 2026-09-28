@@ -1,0 +1,19 @@
+# kafbat/kafka-ui values, release "kafka-ui" (namespace data), fullnameOverride so the Service is
+# named "kafka-ui" (matches the HTTPRoute backendRef in values/small.yaml + values/ha.yaml).
+fullnameOverride: kafka-ui
+
+yamlApplicationConfig:
+  kafka:
+    clusters:
+      - name: kafka
+        bootstrapServers: kafka-kafka-bootstrap.data.svc.cluster.local:9092
+  auth:
+    type: disabled
+  management:
+    health:
+      ldap:
+        enabled: false
+
+resources:
+  requests: { cpu: 50m, memory: 256Mi }
+  limits: { memory: 512Mi }

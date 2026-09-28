@@ -1,0 +1,53 @@
+# bedag/raw values for release <instance>-glue (namespace data), installed BEFORE the cnpg/cluster release.
+# One template renders both secrets from the same password, so they can never disagree:
+#   data/<instance>-app-credentials  basic-auth, used by the Cluster as bootstrap.initdb.secret
+#   apps/<instance>-conn             the connection contract (README.md)
+# Password: kept from the existing credentials secret (lookup), else derived from the data Namespace UID
+# + release name (sha256sum) — stable across upgrades, unique per cluster, no state passed between steps.
+templates:
+  - |
+    {{- $instance := trimSuffix "-glue" .Release.Name }}
+    {{- $creds := printf "%s-app-credentials" $instance }}
+    {{- $existing := lookup "v1" "Secret" "data" $creds }}
+    {{- $pass := "" }}
+    {{- if and $existing (hasKey (default dict $existing.data) "password") }}
+    {{- $pass = index $existing.data "password" | b64dec }}
+    {{- else }}
+    {{- $ns := lookup "v1" "Namespace" "" "data" }}
+    {{- $uid := dig "metadata" "uid" "" $ns }}
+    {{- $pass = printf "%s/%s" $uid .Release.Name | sha256sum | trunc 32 }}
+    {{- end }}
+    {{- $user := "app" }}
+    {{- $db := "app" }}
+    {{- $host := printf "%s-rw.data.svc.cluster.local" $instance }}
+    {{- $readHost := printf "%s-ro.data.svc.cluster.local" $instance }}
+    apiVersion: v1
+    kind: Secret
+    metadata:
+      name: {{ $creds }}
+      namespace: data
+      labels:
+        cnpg.io/reload: "true"
+    type: kubernetes.io/basic-auth
+    stringData:
+      username: {{ $user }}
+      password: {{ $pass | quote }}
+    ---
+    apiVersion: v1
+    kind: Secret
+    metadata:
+      name: {{ $instance }}-conn
+      namespace: apps
+      labels:
+        sdl.dev/conn: "true"
+    type: Opaque
+    stringData:
+      HOST: {{ $host }}
+      READ_HOST: {{ $readHost }}
+      PORT: "5432"
+      USER: {{ $user }}
+      PASSWORD: {{ $pass | quote }}
+      DATABASE: {{ $db }}
+      URL: {{ printf "postgresql://%s:%s@%s:5432/%s" ($user | urlquery) ($pass | urlquery) $host $db | quote }}
+      READ_URL: {{ printf "postgresql://%s:%s@%s:5432/%s" ($user | urlquery) ($pass | urlquery) $readHost $db | quote }}
+      JDBC_URL: {{ printf "jdbc:postgresql://%s:5432/%s" $host $db | quote }}

@@ -1,0 +1,100 @@
+# CloudPirates redis values — ha: Redis Cluster, 3 primaries + 3 replicas (MODE=cluster), 2 pods per zone.
+# The chart's post-install/upgrade Job runs `redis-cli --cluster create --cluster-replicas 1` once (it skips a
+# healthy or recovering cluster). Nodes announce their pod FQDN (cluster.announceHostnames), so the cluster
+# re-forms by gossip even after all pods restart with new IPs.
+# Trade-off: replica placement is not zone-aware — a primary and its replica may share a zone (smoke.sh warns).
+architecture: cluster
+replicaCount: 6
+clusterReplicaCount: 1
+
+image:
+  pullPolicy: IfNotPresent   # tag + digest pinned by the chart (redis 8.10.2)
+
+auth:
+  enabled: false             # the contract has no password (NetworkPolicy-free lab)
+
+cluster:
+  announceHostnames: true
+  config:
+    nodeTimeout: 5000        # a replica is promoted ~5–10 s after its primary dies
+    requireFullCoverage: false
+
+extraConfig: |
+  protected-mode no
+  appendonly yes
+  appendfsync everysec
+  # A hard stop (Docker Desktop quit, node kill) can leave a corrupt AOF tail; without this the node
+  # crash-loops on "Bad file format reading the append only file". Dropping up to 1 MiB of tail is fine
+  # for a cache; replicas re-sync from their primary.
+  aof-load-truncated yes
+  aof-load-corrupt-tail-max-size 1048576
+  cluster-require-full-coverage no
+  save ""
+  maxmemory 256mb
+  maxmemory-policy volatile-lru
+  tcp-keepalive 60
+
+resources:
+  requests: { cpu: 50m, memory: 128Mi }
+  limits: { memory: 384Mi }
+initContainer:
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits: { memory: 64Mi }
+clusterInitJob:
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits: { memory: 128Mi }
+
+persistence:
+  enabled: true
+  size: 1Gi
+persistentVolumeClaimRetentionPolicy:
+  enabled: true
+  whenDeleted: Delete        # helm uninstall wipes the data -> a re-install forms a fresh cluster
+  whenScaled: Retain
+
+pdb:
+  enabled: true
+  minAvailable: ""
+  maxUnavailable: 1
+
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: DoNotSchedule
+    labelSelector:
+      matchLabels: { app.kubernetes.io/name: redis }
+    matchLabelKeys: [app.kubernetes.io/instance]
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels: { app.kubernetes.io/name: redis }
+    matchLabelKeys: [app.kubernetes.io/instance]
+
+metrics:
+  enabled: true
+  image:
+    pullPolicy: IfNotPresent
+  resources:
+    requests: { cpu: 10m, memory: 24Mi }
+    limits: { memory: 64Mi }
+  serviceMonitor:
+    enabled: true
+
+# Connection contract: Secret apps/<release>-conn (README.md).
+extraObjects:
+  - apiVersion: v1
+    kind: Secret
+    metadata:
+      name: "{{ .Release.Name }}-conn"
+      namespace: apps
+      labels:
+        sdl.dev/conn: "true"
+    type: Opaque
+    stringData:
+      URL: "redis://{{ include \"redis.fullname\" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}"
+      MODE: "{{ ternary \"cluster\" \"standalone\" (eq .Values.architecture \"cluster\") }}"
+      HOST: "{{ include \"redis.fullname\" . }}.{{ .Release.Namespace }}.svc.cluster.local"
+      PORT: "{{ .Values.service.port }}"

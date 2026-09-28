@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Removes Floci and its volume (all buckets/queues/tables).
+# Removes Floci and its volume (all buckets/queues/tables) and aws-glue.
 source "$(dirname "$0")/../../../scripts/lib.sh"
-kc -n apps delete secret aws-conn --ignore-not-found >/dev/null
-kc -n data delete deploy/aws service/aws pvc/aws-data --ignore-not-found --wait >/dev/null
+helm uninstall aws-glue --kube-context "$SDL_CLUSTER" -n apps --ignore-not-found >/dev/null
+helm uninstall aws --kube-context "$SDL_CLUSTER" -n data --ignore-not-found >/dev/null
 ok "aws removed"

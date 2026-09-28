@@ -1,0 +1,61 @@
+# CloudPirates redis values — small: one standalone Redis (MODE=standalone). No replicas, no failover.
+architecture: standalone
+
+image:
+  pullPolicy: IfNotPresent   # tag + digest pinned by the chart (redis 8.10.2)
+
+auth:
+  enabled: false             # the contract has no password
+
+extraConfig: |
+  protected-mode no
+  appendonly yes
+  appendfsync everysec
+  aof-load-truncated yes
+  aof-load-corrupt-tail-max-size 1048576
+  save ""
+  maxmemory 256mb
+  maxmemory-policy volatile-lru
+  tcp-keepalive 60
+
+resources:
+  requests: { cpu: 50m, memory: 128Mi }
+  limits: { memory: 384Mi }
+initContainer:
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits: { memory: 64Mi }
+
+persistence:
+  enabled: true
+  size: 1Gi
+persistentVolumeClaimRetentionPolicy:
+  enabled: true
+  whenDeleted: Delete
+  whenScaled: Retain
+
+metrics:
+  enabled: true
+  image:
+    pullPolicy: IfNotPresent
+  resources:
+    requests: { cpu: 10m, memory: 24Mi }
+    limits: { memory: 64Mi }
+  serviceMonitor:
+    enabled: true
+
+# Connection contract: Secret apps/<release>-conn (README.md).
+extraObjects:
+  - apiVersion: v1
+    kind: Secret
+    metadata:
+      name: "{{ .Release.Name }}-conn"
+      namespace: apps
+      labels:
+        sdl.dev/conn: "true"
+    type: Opaque
+    stringData:
+      URL: "redis://{{ include \"redis.fullname\" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}"
+      MODE: "{{ ternary \"cluster\" \"standalone\" (eq .Values.architecture \"cluster\") }}"
+      HOST: "{{ include \"redis.fullname\" . }}.{{ .Release.Namespace }}.svc.cluster.local"
+      PORT: "{{ .Values.service.port }}"
