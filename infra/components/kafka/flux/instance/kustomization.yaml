@@ -1,0 +1,15 @@
+# Shared by flux/small and flux/ha (the profile overlays add the Kafka + KafkaNodePool CRs).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - glue.yaml
+  - releases.yaml
+configMapGenerator:
+  - name: kafka-ui-values
+    namespace: flux-system
+    files:
+      - kafka-ui.yaml=../../values/kafka-ui.yaml
+generatorOptions:
+  disableNameSuffixHash: true
+  labels:
+    reconcile.fluxcd.io/watch: Enabled

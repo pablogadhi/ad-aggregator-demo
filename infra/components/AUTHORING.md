@@ -8,45 +8,76 @@ back into the template (`scripts/harvest-component.sh`) so the next design reuse
 
 ## Layout
 
+A component is a **Flux base**: plain Flux objects that `make up` / `make sync` push (as an OCI artifact of
+`infra/`) and Flux reconciles. No install scripts.
+
 ```
 infra/components/<name>/
-├── install.sh        # usage: install.sh <profile> [instance] — idempotent; only pinned `helm_install` calls:
-│                     #   operator release (if any) → glue release → instance release
-├── uninstall.sh      # usage: uninstall.sh [instance] — helm uninstall the instance + glue; operators may stay
-├── smoke.sh          # usage: smoke.sh [instance] — proves real behaviour; exit non-zero on failure
-├── README.md         # what it is, charts + versions, profiles, connection contract, experiments
+├── flux/
+│   ├── operator/            # (if any) once per design → Kustomization <name>-operator
+│   │   ├── kustomization.yaml   #   resources + configMapGenerator from ../../values/operator.yaml
+│   │   ├── sources.yaml         #   HelmRepository / OCIRepository (charts the instances use too)
+│   │   └── releases.yaml        #   the operator HelmRelease
+│   ├── instance/            # once per stack.yaml entry → Kustomization <instance>
+│   │   ├── kustomization.yaml   #   configMapGenerator ${INSTANCE}-values from ../../values/*.yaml
+│   │   ├── releases.yaml        #   HelmRelease(s), named/configured with ${INSTANCE} and ${PROFILE}
+│   │   └── glue.yaml            #   plain YAML: static conn secret, CRs, PodMonitors, HTTPRoutes
+│   ├── <profile>/           # (optional) overlay used instead of instance/ when profiles differ in plain
+│   │                        #   YAML (kafka: Kafka + KafkaNodePool per profile on top of ../instance)
+│   └── single-instance      # (optional) marker: stack.py validate rejects instance != <name>
+├── smoke.sh                 # usage: smoke.sh [instance] — proves real behaviour; exit non-zero on failure
+├── README.md                # what it is, charts + versions, profiles, connection contract, experiments
 └── values/
-    ├── operator.yaml # values for the upstream operator chart (if any)
-    ├── small.yaml    # instance chart values — minimum footprint
-    ├── ha.yaml       # instance chart values — replicated across zones, for failure experiments
-    └── glue.yaml     # bedag/raw values: the `<instance>-conn` secret and any CRs no chart provides
+    ├── operator.yaml        # values for the upstream operator chart (if any)
+    ├── small.yaml           # instance chart values — minimum footprint
+    ├── ha.yaml              # instance chart values — replicated across zones, for failure experiments
+    └── glue.yaml            # bedag/raw values — ONLY for lookup-generated values (credentials)
 ```
+
+`scripts/stack.py flux` turns `stack.yaml` into `infra/flux/clusters/sdl/stack.generated.yaml`
+(gitignored, regenerated on every push): `platform → platform-glue → <name>-operator → <instance> → design`,
+each a Flux `Kustomization` with `dependsOn`, `wait: true` and, per instance,
+`postBuild.substitute: {INSTANCE, PROFILE}`. Path: `flux/<profile>/` if it exists, else `flux/instance/`.
+A profile is valid if `flux/<profile>/` or `values/<profile>.yaml` exists. Removing an entry from
+`stack.yaml` + `make sync` prunes its Kustomization, which uninstalls its releases.
 
 Name: lower-kebab, the technology (`kafka`, `redis`, `elasticsearch`, `flink`, `temporal`, `aws`).
 
 ## Rules
 
-1. **Scripts** start with `source "$(dirname "$0")/../../../scripts/lib.sh"` and use its helpers:
-   `kc` (kubectl on the lab context), `helm_repo`, `helm_install <release> <chart> <version> <ns>`,
-   `wait_for`, `run_once <ns> <image> <cmd…>`, `log/ok/warn/die`.
-2. **Pin every version** (chart + app image) as variables at the top of `install.sh`. Look up current
-   versions (helm search / context7 / release pages) when creating the component — never guess.
-3. **Namespaces:** operators in their own namespace (e.g. `strimzi-system`); instances in `data`.
+1. **Flux objects** (`source.toolkit.fluxcd.io/v1`, `helm.toolkit.fluxcd.io/v2`) live in namespace
+   `flux-system`; a HelmRelease sets `releaseName` and `targetNamespace` (+ `install.createNamespace` for
+   an operator namespace), `install/upgrade.remediation.retries: 3`, and `crds: CreateReplace` when the
+   chart ships CRDs. Values: `valuesFrom` a generated ConfigMap (`disableNameSuffixHash: true` + label
+   `reconcile.fluxcd.io/watch: Enabled`, so `make sync` upgrades exactly the release whose values
+   changed); per-instance overrides in `spec.values`. OCI charts: an `OCIRepository` with the Helm
+   `layerSelector` + `chartRef`. Anything named per instance uses `${INSTANCE}` (sources too, so two
+   instances never share an object). Quote `${…}` inside YAML flow maps (`{ name: "${INSTANCE}-values" }`);
+   annotate objects containing literal `${`/`$1` (JMX rules, relabel configs) with
+   `kustomize.toolkit.fluxcd.io/substitute: disabled`.
+2. **Pin every version** (chart version / OCI tag + app image) in the Flux objects, with a comment on the
+   app version. Look up current versions (helm search / context7 / release pages) — never guess.
+3. **Namespaces:** operators in their own namespace (e.g. `strimzi-system`); instances in `data`
+   (`data`, `apps`, `k6` are created by the platform).
 4. **Placement:** replicated profiles spread over `topology.kubernetes.io/zone` (topologySpreadConstraints
    or the operator's rack/zone awareness). Set requests/limits on everything. Budget: a whole design on
    `small` profiles must fit Docker's 12 GiB minimum (`make doctor`); `ha` may assume ~16 GiB.
-5. **Install from existing charts on Artifact Hub, no `kubectl apply`.** Prefer the upstream project's
-   own chart/operator, then a maintained community chart that runs official images; write chart code only
-   when Artifact Hub has nothing suitable.
-   Anything no chart provides (the conn secret, CRs such as `Kafka`, generated credentials) goes in a
-   **`bedag/raw`** release named `<instance>-glue` (`values/glue.yaml`; its `templates:` run through `tpl`,
-   so `.Release.Name`, `lookup`, `randAlphaNum`, `genPrivateKey` work — use `lookup` to keep generated
-   values stable across upgrades). The release name is the instance. **No Bitnami** charts/images (moved
-   to a legacy, unmaintained catalog in Aug 2025).
-6. **Metrics:** if the component exposes Prometheus metrics, add a ServiceMonitor/PodMonitor (any
+5. **Install from existing charts on Artifact Hub.** Prefer the upstream project's own chart/operator,
+   then a maintained community chart that runs official images; write chart code only when Artifact Hub
+   has nothing suitable. Anything no chart provides (the conn secret, CRs such as `Kafka`, routes) is
+   **plain YAML** in the base. A **`bedag/raw`** HelmRelease (`<instance>-glue`, `values/glue.yaml`,
+   shared `HelmRepository bedag`) only when a value must be **generated and kept** — its `templates:` run
+   through `tpl` in a real `helm upgrade`, so `lookup`, `randAlphaNum`, `genPrivateKey` work (this is
+   why the lab uses Flux, not Argo CD). **No Bitnami** charts/images.
+6. **Readiness:** `make up` waits until every Kustomization and HelmRelease is Ready, so readiness must be
+   real. kstatus ignores a plain `Ready` condition on CRs: give the HelmRelease `healthCheckExprs` for CRs
+   it renders (postgres: CNPG `Cluster`); Strimzi CRs applied as plain YAML are covered by the
+   `healthCheckExprs` stack.py adds to every generated Kustomization.
+7. **Metrics:** if the component exposes Prometheus metrics, add a ServiceMonitor/PodMonitor (any
    namespace is scraped). Grafana dashboards: ConfigMap labelled `grafana_dashboard: "1"`.
-7. **UI (optional):** expose tool UIs host-based through the gateway, e.g. `kafka-ui.localhost` —
-   HTTPRoute with `parentRefs: [{name: sdl, namespace: envoy-gateway-system}]`.
+8. **UI (optional):** expose tool UIs host-based through the gateway, e.g. `kafka-ui.localhost` —
+   HTTPRoute with `parentRefs: [{name: sdl, namespace: envoy-gateway-system}]`. Stateless releases may
+   set `driftDetection.mode: enabled` (kafka-ui, aws) so helm-controller undoes manual edits.
 
 ## Instances (installing a component more than once)
 
@@ -59,16 +90,17 @@ components:
   - { name: postgres, instance: analytics-db, profile: ha }  # -> analytics-db-conn
 ```
 
-`make up` calls `install.sh <profile> <instance>`, `make smoke` calls `smoke.sh <instance>` (`make smoke
-C=<instance>` for one). The instance is always passed, so every component receives the 2nd argument:
+`make up` / `make sync` reconcile one Kustomization per entry with `INSTANCE` and `PROFILE` substituted;
+`make smoke` calls `smoke.sh <instance>` (`make smoke C=<instance>` for one):
 
 - A component that **supports** instances uses it to name its resources (CR / StatefulSet / Services /
   PodMonitor = `<instance>`, hosts `<instance>-….data.svc.cluster.local`) and publishes
   **`apps/<instance>-conn`** with the same keys as the default instance. Services then list
   `connections: [<instance>]` and get env vars prefixed `<INSTANCE>_` (dashes → underscores:
   `analytics-db` → `ANALYTICS_DB_URL`). The default instance must behave exactly as before.
-- A component that **doesn't** support instances may ignore the argument, or (better) fail fast if
-  it isn't the component name. Say which in the README. `postgres` is the reference for instances.
+- A component that **doesn't** support instances ships the `flux/single-instance` marker, so
+  `stack.py validate` fails fast when the instance isn't the component name. Say so in the README.
+  `postgres` is the reference for instances.
 
 ## The connection contract (most important)
 
@@ -94,12 +126,13 @@ secret is consumed from another namespace. If you need a key not listed here, ad
 ## Design-specific setup is NOT part of the component
 
 Topics, buckets, keyspaces, indices, extra databases belong to the design: put them in
-`infra/design/` (applied by infra-builder after components are up, e.g. Strimzi `KafkaTopic` CRs,
-a Job that creates buckets). The component stays reusable across designs.
+`infra/design/flux/` (Kustomization `design`, reconciled after every component instance is Ready: e.g.
+Strimzi `KafkaTopic` CRs, a Job that creates buckets, gateway policies). The component stays reusable.
 
 ## Done means
 
-- `infra/components/<name>/install.sh <profile>` works on a fresh `make up` and when re-run
+- `make up` from scratch is green with the component in `stack.yaml`, and a second `make up`/`make sync`
+  changes nothing (`scripts/flux.sh get all -A`)
 - `make smoke C=<name>` passes for both profiles you ship
 - README documents profiles, the contract keys, and 1–3 failure experiments worth running
 - a PLAYBOOK.md row exists/updated with what you learned (gotchas, versions)

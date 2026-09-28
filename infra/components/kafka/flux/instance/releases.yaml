@@ -1,0 +1,22 @@
+# kafbat kafka-ui at http://kafka-ui.localhost:8080 (HTTPRoute in glue.yaml). Helm drift detection is
+# on: delete or edit its Deployment and helm-controller puts it back on the next reconcile.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: kafka-ui
+  namespace: flux-system
+spec:
+  interval: 5m
+  releaseName: kafka-ui
+  targetNamespace: data
+  chart:
+    spec:
+      chart: kafka-ui
+      version: 1.6.5           # app v1.5.0
+      sourceRef: { kind: HelmRepository, name: kafbat }
+  install: { remediation: { retries: 3 } }
+  upgrade: { remediation: { retries: 3 } }
+  driftDetection:
+    mode: enabled
+  valuesFrom:
+    - { kind: ConfigMap, name: kafka-ui-values, valuesKey: kafka-ui.yaml }

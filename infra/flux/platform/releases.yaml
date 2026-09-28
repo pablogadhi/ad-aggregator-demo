@@ -1,0 +1,115 @@
+# One HelmRelease per platform chart (release names/namespaces unchanged from the helm-install era).
+# All independent -> helm-controller installs them in parallel; Kustomization `platform` waits for all.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: eg
+  namespace: flux-system
+spec:
+  interval: 10m
+  releaseName: eg
+  targetNamespace: envoy-gateway-system
+  chartRef: { kind: OCIRepository, name: envoy-gateway }
+  install: { createNamespace: true, crds: CreateReplace, remediation: { retries: 3 } }
+  upgrade: { crds: CreateReplace, remediation: { retries: 3 } }
+  timeout: 10m
+  valuesFrom:
+    - { kind: ConfigMap, name: platform-values, valuesKey: envoy-gateway.yaml }
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: cert-manager
+  namespace: flux-system
+spec:
+  interval: 10m
+  releaseName: cert-manager
+  targetNamespace: cert-manager
+  chart:
+    spec:
+      chart: cert-manager
+      version: v1.21.2
+      sourceRef: { kind: HelmRepository, name: jetstack }
+  install: { createNamespace: true, remediation: { retries: 3 } }
+  upgrade: { remediation: { retries: 3 } }
+  timeout: 10m
+  values:
+    crds: { enabled: true }
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: metrics-server
+  namespace: flux-system
+spec:
+  interval: 10m
+  releaseName: metrics-server
+  targetNamespace: kube-system
+  chart:
+    spec:
+      chart: metrics-server
+      version: 3.14.0
+      sourceRef: { kind: HelmRepository, name: metrics-server }
+  install: { remediation: { retries: 3 } }
+  upgrade: { remediation: { retries: 3 } }
+  valuesFrom:
+    - { kind: ConfigMap, name: platform-values, valuesKey: metrics-server.yaml }
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: kps
+  namespace: flux-system
+spec:
+  interval: 10m
+  releaseName: kps
+  targetNamespace: monitoring
+  chart:
+    spec:
+      chart: kube-prometheus-stack
+      version: 91.5.0
+      sourceRef: { kind: HelmRepository, name: prometheus-community }
+  install: { createNamespace: true, crds: CreateReplace, remediation: { retries: 3 } }
+  upgrade: { crds: CreateReplace, remediation: { retries: 3 } }
+  timeout: 15m
+  valuesFrom:
+    - { kind: ConfigMap, name: platform-values, valuesKey: kube-prometheus-stack.yaml }
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: chaos-mesh
+  namespace: flux-system
+spec:
+  interval: 10m
+  releaseName: chaos-mesh
+  targetNamespace: chaos-mesh
+  chart:
+    spec:
+      chart: chaos-mesh
+      version: 2.8.4
+      sourceRef: { kind: HelmRepository, name: chaos-mesh }
+  install: { createNamespace: true, crds: CreateReplace, remediation: { retries: 3 } }
+  upgrade: { crds: CreateReplace, remediation: { retries: 3 } }
+  timeout: 10m
+  valuesFrom:
+    - { kind: ConfigMap, name: platform-values, valuesKey: chaos-mesh.yaml }
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: k6-operator
+  namespace: flux-system
+spec:
+  interval: 10m
+  releaseName: k6-operator
+  targetNamespace: k6
+  chart:
+    spec:
+      chart: k6-operator
+      version: 4.6.0
+      sourceRef: { kind: HelmRepository, name: grafana }
+  install: { crds: CreateReplace, remediation: { retries: 3 } }
+  upgrade: { crds: CreateReplace, remediation: { retries: 3 } }
+  values:
+    namespace: { create: false }   # namespaces.yaml owns ns k6; the chart's own Namespace would conflict

@@ -1,0 +1,9 @@
+# archive.apache.org keeps every release (downloads.apache.org only the latest ones); one repo per version.
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: flink-operator
+  namespace: flux-system
+spec:
+  interval: 24h
+  url: https://archive.apache.org/dist/flink/flink-kubernetes-operator-1.16.1/

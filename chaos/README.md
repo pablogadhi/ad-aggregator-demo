@@ -63,6 +63,36 @@ make chaos-clear && make e2e
 | 8 | `kubectl -n apps patch flinkdeployment click-aggregator --type merge -p '{"spec":{"job":{"parallelism":6}}}'` (`chaos/flink-rescale.sh 6`) | a rescale loses no counts | reconcile exact; job RUNNING; freshness gap |
 | 9 | `redis-all-kill` under `-e HOT=1`                         | clicks flow, hot ad stays salted (last known set), markings resume      | errors < 1 %; `hot_ad_clicks_hot` ≈ 100 %; `/api/click-receiver/hot-ads` refreshes again        |
 
+## Flux and chaos (self-healing infra)
+
+Everything under `infra/` (platform, components, design infra) is reconciled by Flux: a manual change to a
+Flux-managed object is reverted at the next reconcile (Kustomizations every 2 min for component instances
+and `design`, 10 min for platform/operators; HelmReleases with drift detection — `kafka-ui`, `aws` — every
+5 min). Pod-level faults (Chaos Mesh, `node-down.sh`) are unaffected: Flux manages the Deployments/CRs,
+not their pods. The FlinkDeployment (#8) is Tilt-managed, so it isn't affected either.
+
+**Before an experiment that edits a Flux-managed object** (scales a component, patches a `Kafka` CR or a
+gateway policy, deletes a conn secret on purpose…), suspend its Kustomization, and resume it after:
+
+```bash
+scripts/flux.sh suspend kustomization kafka      # kafka, redis, postgres, analytics-db, aws, flink, design, platform…
+# … experiment …
+scripts/flux.sh resume kustomization kafka       # Flux re-applies the declared state
+```
+
+**Drift demo** (the self-healing is the experiment):
+
+```bash
+kubectl -n apps delete secret kafka-conn                   # a component's connection contract disappears
+scripts/flux.sh get kustomization kafka                    # watch: recreated at the next reconcile (≤ 2 min)
+scripts/flux.sh reconcile kustomization kafka --with-source   # or force it now
+kubectl -n data delete deploy kafka-ui                     # helm-controller drift detection (≤ 5 min, or
+scripts/flux.sh reconcile helmrelease kafka-ui             #   reconcile the HelmRelease) restores it
+```
+
+The web UI at <http://flux.localhost:8080> shows the tree platform → components → design and each
+reconcile, and can suspend/resume/reconcile from the browser (anonymous lab admin).
+
 ## Writing new experiments (for designs)
 
 Derive them from the spec's non-functional requirements. For each one write down the hypothesis,

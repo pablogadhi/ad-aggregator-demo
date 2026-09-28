@@ -10,6 +10,9 @@
   stack.py client              -> "true" / "false"
   stack.py validate [what]     -> exits non-zero if stack.yaml references missing folders
                                   (what: all | components; default all)
+  stack.py flux                -> Flux Kustomizations for the components + design (YAML), written to
+                                  infra/flux/clusters/sdl/stack.generated.yaml by scripts/flux.sh
+  stack.py flux-names          -> names of every Flux Kustomization the lab should end up with
 """
 
 import os
@@ -22,6 +25,15 @@ except ImportError:  # fall back to an ephemeral uv env so no global install is 
     os.execvp("uv", ["uv", "run", "--quiet", "--no-project", "--with", "pyyaml", "python3", *sys.argv])
 
 ROOT = Path(__file__).resolve().parent.parent
+INFRA = ROOT / "infra"
+
+# Readiness of CRs that kstatus can't judge (it ignores a plain `Ready` condition). Added to every
+# generated Kustomization; kinds a Kustomization doesn't apply are simply unused.
+HEALTH_EXPRS = [
+    {"apiVersion": "kafka.strimzi.io/v1", "kind": kind,
+     "current": "status.conditions.exists(e, e.type == 'Ready' && e.status == 'True')"}
+    for kind in ("Kafka", "KafkaTopic")
+]
 STACK_FILE = Path(os.environ.get("SDL_STACK_FILE", ROOT / "stack.yaml"))  # override for tests
 
 
@@ -37,6 +49,55 @@ def load() -> dict:
         comps.append(c)
     data["components"] = comps
     return data
+
+
+def component_dir(name: str) -> Path:
+    return INFRA / "components" / name
+
+
+def instance_path(c: dict) -> Path:
+    """flux/<profile>/ when the profiles differ in plain YAML (an overlay), else flux/instance/."""
+    d = component_dir(c["name"]) / "flux"
+    return d / c["profile"] if (d / c["profile"]).is_dir() else d / "instance"
+
+
+def kustomization(name: str, path: Path, depends: list[str], substitute: dict | None = None,
+                  interval: str = "10m", timeout: str = "15m") -> dict:
+    spec = {
+        "dependsOn": [{"name": d} for d in depends],
+        "interval": interval,
+        "retryInterval": "1m",
+        "timeout": timeout,
+        "sourceRef": {"kind": "OCIRepository", "name": "flux-system"},
+        "path": "./" + str(path.relative_to(INFRA)),
+        "prune": True,
+        "wait": True,
+        "healthCheckExprs": HEALTH_EXPRS,
+    }
+    if substitute:
+        spec["postBuild"] = {"substitute": substitute}
+    return {"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization",
+            "metadata": {"name": name, "namespace": "flux-system"}, "spec": spec}
+
+
+def flux_kustomizations(data: dict) -> list[dict]:
+    """platform-glue -> <component>-operator (once per component, if flux/operator/ exists)
+    -> <instance> (one per stack.yaml entry, INSTANCE/PROFILE substituted) -> design."""
+    docs, instances, seen = [], [], set()
+    for c in data["components"]:
+        op = component_dir(c["name"]) / "flux" / "operator"
+        if c["name"] not in seen and op.is_dir():
+            docs.append(kustomization(f"{c['name']}-operator", op, ["platform-glue"]))
+        seen.add(c["name"])
+        dep = f"{c['name']}-operator" if op.is_dir() else "platform-glue"
+        # interval 2m: conn secrets and CRs deleted by hand come back quickly (drift demo)
+        docs.append(kustomization(c["instance"], instance_path(c), [dep],
+                                  {"INSTANCE": c["instance"], "PROFILE": c["profile"]}, interval="2m"))
+        instances.append(c["instance"])
+    design = INFRA / "design" / "flux"
+    if (design / "kustomization.yaml").is_file():
+        docs.append(kustomization("design", design, instances or ["platform-glue"], interval="2m"))
+    return docs
 
 
 def main(argv: list[str]) -> int:
@@ -69,8 +130,19 @@ def main(argv: list[str]) -> int:
         for dup in sorted({i for i in instances if instances.count(i) > 1}):
             errors.append(f"component instance '{dup}' is listed twice (set a distinct `instance:`)")
         for c in data["components"]:
-            if not (ROOT / "infra/components" / c["name"] / "install.sh").exists():
-                errors.append(f"component '{c['name']}' has no infra/components/{c['name']}/install.sh")
+            d = component_dir(c["name"])
+            if not (d / "flux").is_dir():
+                errors.append(f"component '{c['name']}' has no infra/components/{c['name']}/flux/")
+                continue
+            if not ((d / "flux" / c["profile"]).is_dir() or (d / "values" / f"{c['profile']}.yaml").is_file()):
+                errors.append(f"component '{c['name']}' has no profile '{c['profile']}'"
+                              f" (flux/{c['profile']}/ or values/{c['profile']}.yaml)")
+            if not instance_path(c).is_dir():
+                errors.append(f"component '{c['name']}' has no flux/instance/ or flux/{c['profile']}/")
+            single = d / "flux" / "single-instance"
+            if single.exists() and c["instance"] != c["name"]:
+                errors.append(f"component '{c['name']}' supports one instance only, named '{c['name']}'"
+                              f" (got '{c['instance']}')")
         for s in [] if only_components else data.get("services") or []:
             if not (ROOT / "services" / s / "pyproject.toml").exists():
                 errors.append(f"service '{s}' has no services/{s}/pyproject.toml")
@@ -80,6 +152,12 @@ def main(argv: list[str]) -> int:
         for e in errors:
             print(f"stack.yaml: {e}", file=sys.stderr)
         return 1 if errors else 0
+    elif cmd == "flux":
+        print("# GENERATED by scripts/stack.py flux from stack.yaml -- do not edit (gitignored)")
+        print(yaml.safe_dump_all(flux_kustomizations(data), sort_keys=False, width=200), end="")
+    elif cmd == "flux-names":
+        names = ["flux-system", "platform", "platform-glue"]
+        print("\n".join(names + [k["metadata"]["name"] for k in flux_kustomizations(data)]))
     else:
         print(f"unknown command: {cmd}", file=sys.stderr)
         return 2

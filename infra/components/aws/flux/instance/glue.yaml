@@ -1,0 +1,15 @@
+# Connection contract (static). Credentials are dummies: Floci doesn't check them.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: aws-conn
+  namespace: apps
+  labels:
+    sdl.dev/conn: "true"
+type: Opaque
+stringData:
+  ENDPOINT_URL: http://aws.data.svc.cluster.local:4566
+  REGION: us-east-1
+  ACCESS_KEY_ID: test
+  SECRET_ACCESS_KEY: test

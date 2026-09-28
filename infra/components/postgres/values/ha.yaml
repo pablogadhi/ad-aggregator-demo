@@ -2,7 +2,7 @@
 # Kill the primary and CNPG promotes a replica.
 # Experiment: synchronous replication (no committed write lost on failover, higher latency):
 #   cluster.postgresql.synchronous: { method: any, number: 1 }
-# install.sh sets fullnameOverride=<instance> and cluster.initdb.secret.name=<instance>-app-credentials.
+# flux/instance/releases.yaml sets fullnameOverride=<instance>, cluster.initdb.secret.name=<instance>-app-credentials.
 type: postgresql
 version:
   postgresql: "18"

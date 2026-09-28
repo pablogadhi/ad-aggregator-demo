@@ -1,0 +1,33 @@
+# spec §6.1: S3 bucket for the click-aggregator's checkpoints + JobManager HA (Floci, via aws-conn).
+# Idempotent (head-bucket || create-bucket). Kept after completion (no TTL) so Flux doesn't recreate it on
+# every reconcile; `force` lets Flux replace it when its (immutable) spec changes.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: create-buckets
+  namespace: apps
+  annotations:
+    kustomize.toolkit.fluxcd.io/force: enabled
+spec:
+  backoffLimit: 6
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: aws
+          image: amazon/aws-cli:2.37.4
+          envFrom:
+            - secretRef: { name: aws-conn }
+              prefix: AWS_          # -> AWS_ENDPOINT_URL, AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -e
+              for b in flink-state; do
+                aws s3api head-bucket --bucket "$b" 2>/dev/null || aws s3api create-bucket --bucket "$b"
+                echo "bucket $b ok"
+              done
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { memory: 256Mi }
+

@@ -2,7 +2,7 @@ SHELL := /usr/bin/env bash
 ENV   := source scripts/env.sh &&
 
 .DEFAULT_GOAL := help
-.PHONY: help doctor up down nuke dev ci smoke test e2e load chaos chaos-clear graph new-service new-design harvest
+.PHONY: help doctor up sync down nuke dev ci smoke test e2e load chaos chaos-clear graph new-service new-design harvest
 
 help: ## list targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*## "}{printf "  \033[36m%-12s\033[0m %s\n",$$1,$$2}'
@@ -10,8 +10,11 @@ help: ## list targets
 doctor: ## read-only check of tools, docker and kernel limits
 	@scripts/doctor.sh
 
-up: ## create cluster + platform + stack.yaml components (idempotent)
+up: ## create cluster + bootstrap Flux, which installs platform + stack.yaml components + infra/design (idempotent)
 	@scripts/up.sh
+
+sync: ## push infra/ (+ stack.yaml) to Flux and wait until it is reconciled (after editing infra/)
+	@scripts/sync.sh
 
 down: ## delete the cluster (keeps the image registry cache)
 	@scripts/down.sh

@@ -1,0 +1,18 @@
+# One per stack.yaml entry (Kustomization <instance>, dependsOn postgres-operator), with
+# postBuild.substitute INSTANCE (names everything) and PROFILE (picks values/<profile>.yaml).
+# values/*.yaml reach the charts through ConfigMap <instance>-values (a key per file) + valuesFrom.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - releases.yaml
+configMapGenerator:
+  - name: ${INSTANCE}-values
+    namespace: flux-system
+    files:
+      - glue.yaml=../../values/glue.yaml
+      - small.yaml=../../values/small.yaml
+      - ha.yaml=../../values/ha.yaml
+generatorOptions:
+  disableNameSuffixHash: true      # the name carries ${INSTANCE}; the watch label replaces the hash
+  labels:
+    reconcile.fluxcd.io/watch: Enabled

@@ -1,7 +1,12 @@
 # postgres (CloudNativePG)
 
 PostgreSQL managed by the CloudNativePG operator, installed from upstream charts only (no local chart
-code, no `kubectl apply`). This is the **reference component** — see `../AUTHORING.md`.
+code), reconciled by Flux. This is the **reference component** — see `../AUTHORING.md`.
+
+Flux base: `flux/operator/` (Kustomization `postgres-operator`: `HelmRepository cnpg` + HelmRelease `cnpg`)
+and `flux/instance/` (Kustomization `<instance>` per `stack.yaml` entry: ConfigMap `<instance>-values` from
+`values/*.yaml`, HelmReleases `<instance>-glue` → `<instance>` via `dependsOn`). The instance release is
+Ready only when CNPG reports the `Cluster` Ready (`healthCheckExprs`).
 
 | Release (namespace)        | Chart                                   | Values               | What                                                    |
 | -------------------------- | --------------------------------------- | -------------------- | ------------------------------------------------------- |
@@ -10,10 +15,10 @@ code, no `kubectl apply`). This is the **reference component** — see `../AUTHO
 | `<instance>` (`data`)      | `cnpg/cluster` 0.8.1                    | `values/<profile>.yaml` | the CNPG `Cluster` + PodMonitor `<instance>-cluster-podmonitor` |
 
 Image pinned in the profile values: `ghcr.io/cloudnative-pg/postgresql:18.4-system-trixie` (the
-operator 1.30.0 default). `install.sh` passes `fullnameOverride=<instance>` (so the Cluster is named
+operator 1.30.0 default). `flux/instance/releases.yaml` sets `fullnameOverride=<instance>` (so the Cluster is named
 after the instance, not `<instance>-cluster`) and `cluster.initdb.secret.name=<instance>-app-credentials`.
 
-**Credentials:** the glue release is installed first and renders both secrets from one password in a
+**Credentials:** the glue release is reconciled first (`dependsOn`) and renders both secrets from one password in a
 single template: kept from the existing credentials secret (`lookup`), otherwise
 `sha256sum(<data Namespace UID>/<release>)` (stable, unique per cluster). CNPG bootstraps owner `app`
 with it (`bootstrap.initdb.secret`); the conn secret's DSNs escape it with `urlquery`.
@@ -27,7 +32,7 @@ with it (`bootstrap.initdb.secret`); the conn secret's DSNs escape it with `urlq
 
 ## Instances
 
-`install.sh <profile> [instance]` — the instance (default `postgres`) is the `cnpg/cluster` release
+The `stack.yaml` instance (default `postgres`, substituted as `${INSTANCE}`) is the `cnpg/cluster` release
 and names the CNPG `Cluster` (pods `<instance>-N`, services `<instance>-rw` / `<instance>-ro`), its
 PodMonitor, the glue release `<instance>-glue` and the conn secret `apps/<instance>-conn`. List the component several times in `stack.yaml` for independent databases:
 
@@ -37,7 +42,7 @@ components:
   - { name: postgres, instance: analytics-db, profile: ha }  # -> analytics-db-conn (ANALYTICS_DB_URL, …)
 ```
 
-`smoke.sh [instance]` and `uninstall.sh [instance]` take the same argument. Every instance uses
+`smoke.sh [instance]` takes the same argument. Every instance uses
 database `app`, owner `app`.
 
 ## Connection contract — Secret `apps/<instance>-conn`
@@ -64,8 +69,9 @@ Need more databases (e.g. one per service, or Temporal's)? Add a CNPG `Database`
 
 ## Operating it
 
-`uninstall.sh [instance]` removes the `<instance>` and `<instance>-glue` releases (CNPG deletes the PVCs
-with the Cluster); the operator stays.
+Remove an instance: delete its `stack.yaml` entry and `make sync` — Flux prunes Kustomization
+`<instance>`, which uninstalls `<instance>` and `<instance>-glue` (CNPG deletes the PVCs with the
+Cluster); the operator stays while any instance remains.
 
 ```bash
 kubectl -n data get cluster                                  # every instance: status, current primary

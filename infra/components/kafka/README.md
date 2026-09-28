@@ -5,16 +5,22 @@ Apache Kafka **4.3.1** managed by the Strimzi operator (**chart/operator 1.2.0**
 `KafkaNodePool` (`dual-role`) whose nodes are both controllers and brokers. Operator in
 `strimzi-system` (watches `data`), cluster `kafka` in `data`. No maintained chart deploys a Strimzi
 cluster, so the `Kafka`/`KafkaNodePool` CRs, the JMX metrics ConfigMap, the PodMonitor, `kafka-conn`
-and the `kafka-ui` HTTPRoute are all `bedag/raw` **2.0.2** `resources:` (release `kafka-glue`) —
-`values/small.yaml` / `values/ha.yaml` are the whole profile, there's no separate instance chart.
+and the `kafka-ui` HTTPRoute are **plain YAML** in the Flux base (nothing is generated, so no `bedag/raw`):
+
+- `flux/operator/` → Kustomization `kafka-operator`: HelmRepositories `strimzi`, `kafbat`; HelmRelease
+  `strimzi` (values `values/operator.yaml`). Its CRDs exist before the cluster CRs are applied.
+- `flux/instance/` (shared): `glue.yaml` (metrics ConfigMap, PodMonitor, `apps/kafka-conn`, HTTPRoute) +
+  HelmRelease `kafka-ui` (values `values/kafka-ui.yaml`, Helm drift detection on).
+- `flux/small/`, `flux/ha/` → Kustomization `kafka` (stack.py picks the profile's directory): the shared
+  instance + that profile's `kafka.yaml` (`Kafka` + `KafkaNodePool`). Ready only once Strimzi reports the
+  `Kafka` Ready.
 
 | Release (namespace)     | Chart                        | What                                                                 |
 | ------------------------ | ----------------------------- | --------------------------------------------------------------------- |
 | `strimzi` (`strimzi-system`) | `strimzi/strimzi-kafka-operator` 1.2.0 | operator, watches `data`                                     |
-| `kafka-glue` (`data`)    | `bedag/raw` 2.0.2              | `Kafka` + `KafkaNodePool`, `kafka-metrics` ConfigMap, PodMonitor `kafka`, `apps/kafka-conn`, HTTPRoute `kafka-ui` |
-| `kafka-ui` (`data`)      | `kafbat/kafka-ui` 1.6.5 (app v1.5.0) | web UI, points at `kafka-kafka-bootstrap.data:9092`; `KAFKA_UI=false` skips it |
+| `kafka-ui` (`data`)      | `kafbat/kafka-ui` 1.6.5 (app v1.5.0) | web UI, points at `kafka-kafka-bootstrap.data:9092` |
 
-One instance per design (`install.sh <profile> [kafka]`; any other instance name fails fast).
+One instance per design, named `kafka` (`flux/single-instance`: `stack.py validate` rejects another name).
 
 ## Profiles
 
@@ -64,9 +70,10 @@ spec: { partitions: 12, replicas: 3, config: { min.insync.replicas: 2, retention
 
 ## kafka-ui
 
-`kafka-ui.localhost:8080` (through the gateway, HTTPRoute in `kafka-glue`). Points at
+`kafka-ui.localhost:8080` (through the gateway, HTTPRoute in `flux/instance/glue.yaml`). Points at
 `kafka-kafka-bootstrap.data.svc.cluster.local:9092` (`auth: disabled` — no login, lab only).
-Skip it with `KAFKA_UI=false ./install.sh <profile>`.
+Drift demo: `kubectl -n data delete deploy kafka-ui` — helm-controller's drift detection recreates it on
+the next HelmRelease reconcile (≤ 5 min, or `scripts/flux.sh reconcile helmrelease kafka-ui`).
 
 ## Operating it
 

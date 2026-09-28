@@ -1,0 +1,35 @@
+# Always-on platform. `platform` = namespaces + chart sources + one HelmRelease per chart (parallel);
+# `platform-glue` = plain YAML that needs their CRDs (Gateway, PodMonitor, tool-UI HTTPRoutes).
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: platform
+  namespace: flux-system
+spec:
+  interval: 10m
+  retryInterval: 1m
+  timeout: 20m
+  sourceRef: { kind: OCIRepository, name: flux-system }
+  path: ./flux/platform
+  prune: true
+  wait: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: platform-glue
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: platform
+  interval: 10m
+  retryInterval: 1m
+  timeout: 5m
+  sourceRef: { kind: OCIRepository, name: flux-system }
+  path: ./flux/platform/glue
+  prune: true
+  wait: true
+  healthCheckExprs:
+    - apiVersion: gateway.networking.k8s.io/v1
+      kind: Gateway
+      current: status.conditions.exists(e, e.type == 'Programmed' && e.status == 'True')

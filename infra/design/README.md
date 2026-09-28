@@ -1,15 +1,19 @@
 # infra/design/ — design-specific infrastructure (ad-aggregator)
 
-Things that belong to _this design_, not to a reusable component. `make up` runs `install.sh`
-after all components are installed: one `helm upgrade --install` of **`bedag/raw` 2.0.2** as release
-`design` (namespace `apps`) with `values/glue.yaml` — no local chart code, no `kubectl apply`.
+Things that belong to _this design_, not to a reusable component: the Flux base `flux/`
+(Kustomization `design`, reconciled after every component instance is Ready). Plain YAML, except
+`jwt-conn`, a `bedag/raw` 2.0.2 HelmRelease because its key is generated once and kept via `lookup`.
 
-| In `values/glue.yaml`                 | What                                                                                              | Spec  |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------- | ----- |
-| `KafkaTopic clicks` (ns `data`)       | 12 partitions, RF 3, `min.insync.replicas=2`, `retention.ms=86400000` (24 h)                        | §6    |
-| Job `apps/create-buckets`             | `post-install,post-upgrade` hook (aws-cli + `aws-conn`): S3 bucket **`flink-state`** in Floci      | §6.1  |
-| Secret `apps/jwt-conn`                | RSA key from `genPrivateKey`, kept via `lookup` (see below)                                        | §4.2  |
-| `SecurityPolicy jwt`, 2 × `BackendTrafficPolicy` | gateway policies (below)                                                                 | §4.2  |
+| File                              | What                                                                                              | Spec  |
+| --------------------------------- | ------------------------------------------------------------------------------------------------- | ----- |
+| `flux/topics.yaml`                | `KafkaTopic clicks` (ns `data`): 12 partitions, RF 3, `min.insync.replicas=2`, `retention.ms=86400000` (24 h) | §6    |
+| `flux/buckets.yaml`               | Job `apps/create-buckets` (aws-cli + `aws-conn`, idempotent): S3 bucket **`flink-state`** in Floci | §6.1  |
+| `flux/jwt-conn.yaml` + `values/jwt-conn.yaml` | HelmRelease `jwt-conn` → Secret `apps/jwt-conn`: RSA key from `genPrivateKey`, kept via `lookup` | §4.2  |
+| `flux/gateway-policies.yaml`      | `SecurityPolicy jwt`, 2 × `BackendTrafficPolicy` (below)                                          | §4.2  |
+
+The bucket Job has no TTL (Flux would recreate it every reconcile) and `kustomize.toolkit.fluxcd.io/force:
+enabled` (Flux replaces it when its immutable spec changes). To re-run it: `kubectl -n apps delete job
+create-buckets` — Flux recreates it within 2 min.
 
 ## jwt-conn (Secret in `apps`, label `sdl.dev/conn=true`)
 
@@ -22,7 +26,7 @@ after all components are installed: one `helm upgrade --install` of **`bedag/raw
 
 Generated on the first install, then **kept** on every upgrade (`lookup` of the existing secret), so
 `KID` never changes across `make up` re-runs. To rotate: `kubectl -n apps delete secret jwt-conn &&
-make up`, then restart `auth`. The gateway no longer needs a copy of the public key: it fetches `auth`'s
+scripts/flux.sh reconcile helmrelease jwt-conn --force`, then restart `auth`. The gateway no longer needs a copy of the public key: it fetches `auth`'s
 JWKS (derived from this private key), so the two can't drift.
 
 ## Gateway policies (namespace `apps`)
@@ -43,7 +47,7 @@ JWKS (derived from this private key), so the two can't drift.
   otherwise re-include an ejected pod once ≥50% of a small replica set is unhealthy). Ejects dead
   backends from Envoy's own observed failures, independent of how fast xDS/endpoint updates land
   — see the platform-level controller HA in `infra/platform/values/envoy-gateway.yaml` and
-  `infra/platform/gateway.yaml` (EnvoyProxy `sdl-proxy`, 2 replicas zone-spread) for the other half
+  `infra/flux/platform/glue/gateway.yaml` (EnvoyProxy `sdl-proxy`, 2 replicas zone-spread) for the other half
   of the zone-loss fix (chaos #7).
 
 Behaviour verified on the cluster with throwaway routes named `ad-placement` / `click-receiver`

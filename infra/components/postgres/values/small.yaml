@@ -1,5 +1,5 @@
 # cnpg/cluster values — small: single instance, no replicas, no failover.
-# install.sh sets fullnameOverride=<instance> and cluster.initdb.secret.name=<instance>-app-credentials.
+# flux/instance/releases.yaml sets fullnameOverride=<instance>, cluster.initdb.secret.name=<instance>-app-credentials.
 type: postgresql
 version:
   postgresql: "18"

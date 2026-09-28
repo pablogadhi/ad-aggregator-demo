@@ -1,0 +1,17 @@
+# Kustomization aws (one instance per design, no operator): Floci (quench floci chart) + the static
+# connection contract apps/aws-conn as plain YAML.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - sources.yaml
+  - releases.yaml
+  - glue.yaml
+configMapGenerator:
+  - name: aws-values
+    namespace: flux-system
+    files:
+      - small.yaml=../../values/small.yaml
+generatorOptions:
+  disableNameSuffixHash: true
+  labels:
+    reconcile.fluxcd.io/watch: Enabled

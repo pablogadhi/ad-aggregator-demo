@@ -1,0 +1,12 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: floci
+  namespace: flux-system
+spec:
+  interval: 24h
+  url: oci://ghcr.io/quenchworks/charts/floci
+  ref: { tag: 0.2.18 }      # appVersion 2.1.0; image pinned by DIGEST in the chart (ghcr.io/quenchworks/images/floci)
+  layerSelector:
+    mediaType: application/vnd.cncf.helm.chart.content.v1.tar+gzip
+    operation: copy

@@ -1,0 +1,15 @@
+# Kustomization flink-operator (dependsOn platform-glue: the webhook certificate comes from cert-manager).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - sources.yaml
+  - releases.yaml
+configMapGenerator:
+  - name: flink-operator-values
+    namespace: flux-system
+    files:
+      - operator.yaml=../../values/operator.yaml
+generatorOptions:
+  disableNameSuffixHash: true
+  labels:
+    reconcile.fluxcd.io/watch: Enabled

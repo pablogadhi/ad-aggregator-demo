@@ -1,0 +1,18 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: jwt-conn
+  namespace: flux-system
+spec:
+  interval: 10m
+  releaseName: jwt-conn
+  targetNamespace: apps
+  chart:
+    spec:
+      chart: raw
+      version: 2.0.2
+      sourceRef: { kind: HelmRepository, name: bedag }
+  install: { remediation: { retries: 3 } }
+  upgrade: { remediation: { retries: 3 } }
+  valuesFrom:
+    - { kind: ConfigMap, name: design-values, valuesKey: jwt-conn.yaml }

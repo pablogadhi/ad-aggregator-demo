@@ -1,0 +1,15 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: ${INSTANCE}
+  namespace: flux-system
+spec:
+  interval: 10m
+  releaseName: ${INSTANCE}
+  targetNamespace: data
+  chartRef: { kind: OCIRepository, name: "${INSTANCE}-chart" }
+  install: { remediation: { retries: 3 } }
+  upgrade: { remediation: { retries: 3 } }
+  timeout: 15m             # ha: 6 pods + the post-install cluster-create Job
+  valuesFrom:
+    - { kind: ConfigMap, name: "${INSTANCE}-values", valuesKey: "${PROFILE}.yaml" }

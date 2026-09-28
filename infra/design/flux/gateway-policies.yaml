@@ -1,0 +1,82 @@
+# spec §4.2 — the API-gateway box. Targets the HTTPRoutes the app chart creates (named after the release);
+# policies for routes that don't exist yet are accepted and attach once Tilt deploys them.
+#
+# JWT at the edge for ad-placement + analytics: RS256 tokens minted by `auth` with the jwt-conn key, verified
+# against auth's own JWKS endpoint (remote JWKS, fetched in-cluster through backendRefs; EG 1.9 rejects the
+# deprecated singular backendRef). Verified claims are copied into headers, overwriting anything the client sent.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: jwt
+  namespace: apps
+spec:
+  targetRefs:
+    - { group: gateway.networking.k8s.io, kind: HTTPRoute, name: ad-placement }
+    - { group: gateway.networking.k8s.io, kind: HTTPRoute, name: analytics }
+  jwt:
+    providers:
+      - name: ad-aggregator
+        issuer: ad-aggregator-auth
+        audiences: [ad-aggregator]
+        remoteJWKS:
+          uri: http://auth.apps.svc.cluster.local/.well-known/jwks.json
+          backendRefs:
+            - { group: "", kind: Service, name: auth, port: 80 }
+          cacheDuration: 300s
+          failedRefetchDuration: 5s   # auth not up yet / restarting: retry soon instead of waiting out the cache
+        claimToHeaders:
+          - { claim: sub, header: X-Auth-Sub }
+          - { claim: role, header: X-Auth-Role }
+          - { claim: advertiser_id, header: X-Auth-Advertiser-Id }
+
+---
+# Passive outlier detection for auth/ad-placement/analytics (chaos #7: a dead pod kept getting ~half the
+# traffic for minutes because xDS/endpoint updates lagged the node loss). Ejection is driven by Envoy's own
+# observed connection/5xx failures, so it works even when xDS is late. panicThreshold: 0 disables Envoy's
+# panic-routing-to-all-hosts fallback, which would otherwise kick in with only 2 backend replicas (1 ejected
+# == 50% unhealthy) and route to the dead pod anyway; alwaysEjectOneEndpoint guarantees ejection even though
+# maxEjectionPercent would otherwise round down to 0 hosts with so few endpoints.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: resilience
+  namespace: apps
+spec:
+  targetRefs:
+    - { group: gateway.networking.k8s.io, kind: HTTPRoute, name: auth }
+    - { group: gateway.networking.k8s.io, kind: HTTPRoute, name: ad-placement }
+    - { group: gateway.networking.k8s.io, kind: HTTPRoute, name: analytics }
+  healthCheck:
+    panicThreshold: 0
+    passive:
+      consecutiveGatewayErrors: 3
+      consecutive5XxErrors: 3
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+      alwaysEjectOneEndpoint: true
+
+---
+# click-receiver: fail fast (2 s), never retry at the gateway — a retried click must be visible to the client,
+# not hidden behind the proxy. Same passive outlier detection as above, merged into this policy (one
+# BackendTrafficPolicy per route) so dead click-receiver pods get ejected too.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: click-receiver
+  namespace: apps
+spec:
+  targetRefs:
+    - { group: gateway.networking.k8s.io, kind: HTTPRoute, name: click-receiver }
+  timeout:
+    http:
+      requestTimeout: 2s
+  retry:
+    numRetries: 0
+  healthCheck:
+    panicThreshold: 0
+    passive:
+      consecutiveGatewayErrors: 3
+      consecutive5XxErrors: 3
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+      alwaysEjectOneEndpoint: true

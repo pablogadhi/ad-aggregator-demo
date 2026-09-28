@@ -1,3 +1,3 @@
-# Sourced files (e.g. infra/platform/versions.env) and lib.sh define vars used elsewhere,
+# Sourced files (e.g. infra/flux/bootstrap/versions.env) and lib.sh define vars used elsewhere,
 # so linting them alone flags every var as unused.
 disable=SC2034

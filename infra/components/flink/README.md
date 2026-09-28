@@ -7,10 +7,11 @@ The **Apache Flink Kubernetes Operator 1.16.1** (helm chart 1.16.1 from
 (`pipelines/<name>/`) deploy a `FlinkDeployment` in `apps`, so the job pods can read the `*-conn`
 secrets. The chart creates the job service account **`flink`** (+ Role) in `apps`. The admission
 webhook uses a cert-manager certificate (the platform installs cert-manager). The operator chart
-provides no metrics PodMonitors, `flink-rest` Service or conn secret, so those are a `bedag/raw`
-2.0.2 release **`flink-glue`** (`values/glue.yaml`), installed right after the operator.
+provides no metrics PodMonitors, `flink-rest` Service or conn secret, so those are plain YAML in
+`flux/small/glue.yaml` (Kustomization `flink`, after Kustomization `flink-operator` = `flux/operator/`:
+HelmRepository + HelmRelease `flink-operator`, values `values/operator.yaml`).
 
-One instance per design (`install.sh small [flink]`; any other instance name fails fast).
+One instance per design, named `flink`, profile `small` only (`flux/single-instance`, `flux/small/`).
 
 ## Versions to build jobs against (verified by `smoke.sh`)
 

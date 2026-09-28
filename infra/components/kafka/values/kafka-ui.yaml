@@ -1,5 +1,5 @@
 # kafbat/kafka-ui values, release "kafka-ui" (namespace data), fullnameOverride so the Service is
-# named "kafka-ui" (matches the HTTPRoute backendRef in values/small.yaml + values/ha.yaml).
+# named "kafka-ui" (matches the HTTPRoute backendRef in flux/instance/glue.yaml).
 fullnameOverride: kafka-ui
 
 yamlApplicationConfig:

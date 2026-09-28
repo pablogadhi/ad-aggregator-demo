@@ -6,8 +6,10 @@ account/token): a LocalStack-compatible AWS emulator (S3, SQS, SNS, DynamoDB, �
 Release `aws` (namespace `data`), `fullnameOverride: aws` so the Deployment/Service keep the name
 `aws` (endpoint unchanged: `http://aws.data.svc.cluster.local:4566`). `floci.storage.mode:
 persistent` + a 5Gi PVC (every write flushed to disk, buckets/objects survive pod restarts). 100m /
-256Mi request, 1Gi limit. `apps/aws-conn` comes from a second release, `aws-glue` (`bedag/raw`
-2.0.2) — the chart itself has no `extraObjects`.
+256Mi request, 1Gi limit. `apps/aws-conn` is plain YAML in the Flux base
+(`flux/instance/glue.yaml`) — the chart itself has no `extraObjects`, and nothing is generated.
+Flux base `flux/instance/` → Kustomization `aws`: `OCIRepository floci`, HelmRelease `aws` (Helm drift
+detection on), ConfigMap `aws-values`.
 
 **Image pinning:** the chart's default `image.repository: ghcr.io/quenchworks/images/floci` is
 already pinned by **digest** (`sha256:4b39fd37…`), with `tag: "2.1.0"` kept only as a human label —
@@ -18,7 +20,7 @@ Hub image, but the same upstream release.)
 **Network policy:** the chart defaults to same-namespace-only ingress; since clients live in `apps`
 and Floci runs in `data`, `values/small.yaml` sets `networkPolicy.allowExternal: true`.
 
-One instance per design (`install.sh small [aws]`; any other instance name fails fast).
+One instance per design, named `aws` (`flux/single-instance`: `stack.py validate` rejects another name).
 
 ## Profiles
 

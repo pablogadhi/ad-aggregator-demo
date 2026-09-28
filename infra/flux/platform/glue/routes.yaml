@@ -1,0 +1,64 @@
+# Tool UIs, host-based. *.localhost resolves to 127.0.0.1 in browsers and curl.
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grafana
+  namespace: monitoring
+spec:
+  parentRefs:
+    - name: sdl
+      namespace: envoy-gateway-system
+  hostnames: ["grafana.localhost"]
+  rules:
+    - backendRefs:
+        - name: kps-grafana
+          port: 80
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: prometheus
+  namespace: monitoring
+spec:
+  parentRefs:
+    - name: sdl
+      namespace: envoy-gateway-system
+  hostnames: ["prometheus.localhost"]
+  rules:
+    - backendRefs:
+        - name: kps-prometheus
+          port: 9090
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: chaos-dashboard
+  namespace: chaos-mesh
+spec:
+  parentRefs:
+    - name: sdl
+      namespace: envoy-gateway-system
+  hostnames: ["chaos.localhost"]
+  rules:
+    - backendRefs:
+        - name: chaos-dashboard
+          port: 2333
+# Flux Operator web UI (Flux Status). Anonymous lab identity, see infra/flux/bootstrap/flux-operator.yaml.
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: flux
+  namespace: flux-system
+spec:
+  parentRefs:
+    - name: sdl
+      namespace: envoy-gateway-system
+  hostnames: ["flux.localhost"]
+  rules:
+    - backendRefs:
+        - name: flux-operator
+          port: 9080

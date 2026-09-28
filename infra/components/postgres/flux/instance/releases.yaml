@@ -1,0 +1,53 @@
+# <instance>-glue (bedag/raw: lookup-generated password -> data/<instance>-app-credentials +
+# apps/<instance>-conn) -> <instance> (cnpg/cluster: the CNPG Cluster <instance>, services -rw/-ro).
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: ${INSTANCE}-glue
+  namespace: flux-system
+spec:
+  interval: 10m
+  releaseName: ${INSTANCE}-glue     # the glue template derives the instance from it (trimSuffix "-glue")
+  targetNamespace: data
+  chart:
+    spec:
+      chart: raw
+      version: 2.0.2
+      sourceRef: { kind: HelmRepository, name: bedag }
+  install: { remediation: { retries: 3 } }
+  upgrade: { remediation: { retries: 3 } }
+  valuesFrom:
+    - { kind: ConfigMap, name: "${INSTANCE}-values", valuesKey: glue.yaml }
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: ${INSTANCE}
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: ${INSTANCE}-glue
+  interval: 10m
+  releaseName: ${INSTANCE}
+  targetNamespace: data
+  chart:
+    spec:
+      chart: cluster
+      version: 0.8.1
+      sourceRef: { kind: HelmRepository, name: cnpg }
+  install: { remediation: { retries: 3 } }
+  upgrade: { remediation: { retries: 3 } }
+  timeout: 15m
+  # Ready only once CNPG reports the Cluster Ready (kstatus alone would accept it immediately)
+  healthCheckExprs:
+    - apiVersion: postgresql.cnpg.io/v1
+      kind: Cluster
+      current: status.conditions.exists(e, e.type == 'Ready' && e.status == 'True')
+  valuesFrom:
+    - { kind: ConfigMap, name: "${INSTANCE}-values", valuesKey: "${PROFILE}.yaml" }
+  values:
+    fullnameOverride: ${INSTANCE}
+    cluster:
+      initdb:
+        secret:
+          name: ${INSTANCE}-app-credentials

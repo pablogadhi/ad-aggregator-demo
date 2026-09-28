@@ -1,0 +1,80 @@
+# Profile ha: 3 dual-role nodes, one per zone, rack-aware (broker.rack), RF 3, minISR 2. One broker (or zone)
+# can die with acks=all still succeeding.
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaNodePool
+metadata:
+  name: dual-role
+  namespace: data
+  labels:
+    strimzi.io/cluster: kafka
+spec:
+  replicas: 3
+  roles: [controller, broker]
+  storage:
+    type: jbod
+    volumes:
+      - id: 0
+        type: persistent-claim
+        size: 5Gi
+        deleteClaim: true
+        kraftMetadata: shared
+  resources:
+    requests: { cpu: 200m, memory: 1Gi }
+    limits: { memory: 1536Mi }
+  jvmOptions:
+    "-Xms": 768m
+    "-Xmx": 768m
+  template:
+    pod:
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              strimzi.io/cluster: kafka
+              strimzi.io/pool-name: dual-role
+---
+apiVersion: kafka.strimzi.io/v1
+kind: Kafka
+metadata:
+  name: kafka
+  namespace: data
+spec:
+  kafka:
+    version: 4.3.1
+    metadataVersion: 4.3-IV0
+    listeners:
+      - name: plain
+        port: 9092
+        type: internal
+        tls: false
+    rack:
+      topologyKey: topology.kubernetes.io/zone
+    config:
+      default.replication.factor: 3
+      min.insync.replicas: 2
+      offsets.topic.replication.factor: 3
+      transaction.state.log.replication.factor: 3
+      transaction.state.log.min.isr: 2
+      num.partitions: 3
+      auto.create.topics.enable: false      # topics are KafkaTopic CRs (infra/design/)
+      replica.selector.class: org.apache.kafka.common.replica.RackAwareReplicaSelector
+    metricsConfig:
+      type: jmxPrometheusExporter
+      valueFrom:
+        configMapKeyRef:
+          name: kafka-metrics
+          key: kafka-metrics-config.yml
+  entityOperator:
+    topicOperator:
+      resources:
+        requests: { cpu: 50m, memory: 192Mi }
+        limits: { memory: 384Mi }
+  kafkaExporter:
+    topicRegex: ".*"
+    groupRegex: ".*"
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { memory: 256Mi }

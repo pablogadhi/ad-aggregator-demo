@@ -1,0 +1,17 @@
+# One per stack.yaml entry (Kustomization <instance>, no operator): the CloudPirates redis chart,
+# release = instance. PROFILE picks values/<profile>.yaml; the chart's extraObjects publish apps/<instance>-conn.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - sources.yaml
+  - releases.yaml
+configMapGenerator:
+  - name: ${INSTANCE}-values
+    namespace: flux-system
+    files:
+      - small.yaml=../../values/small.yaml
+      - ha.yaml=../../values/ha.yaml
+generatorOptions:
+  disableNameSuffixHash: true
+  labels:
+    reconcile.fluxcd.io/watch: Enabled

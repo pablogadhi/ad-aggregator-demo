@@ -1,4 +1,4 @@
-# bedag/raw values for release <instance>-glue (namespace data), installed BEFORE the cnpg/cluster release.
+# bedag/raw values for release <instance>-glue (namespace data), reconciled BEFORE the cnpg/cluster release (dependsOn).
 # One template renders both secrets from the same password, so they can never disagree:
 #   data/<instance>-app-credentials  basic-auth, used by the Cluster as bootstrap.initdb.secret
 #   apps/<instance>-conn             the connection contract (README.md)

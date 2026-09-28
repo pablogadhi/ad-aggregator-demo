@@ -1,0 +1,28 @@
+# bedag/raw values for HelmRelease jwt-conn (release jwt-conn, namespace apps) — the only design infra
+# that needs templating: the key is generated once (genPrivateKey) and kept via lookup on every upgrade.
+templates:
+  # Secret apps/jwt-conn: RSA key generated once (genPrivateKey, PKCS#1 PEM), then kept via lookup on every
+  # upgrade. KID = first 16 hex chars of sha256(PEM), so it is stable as long as the key is.
+  # Rotate: kubectl -n apps delete secret jwt-conn && scripts/flux.sh reconcile helmrelease jwt-conn --force,
+  # then restart auth.
+  - |
+    {{- $existing := lookup "v1" "Secret" "apps" "jwt-conn" }}
+    {{- $key := "" }}
+    {{- if and $existing (hasKey (default dict $existing.data) "PRIVATE_KEY_PEM") }}
+    {{- $key = index $existing.data "PRIVATE_KEY_PEM" | b64dec }}
+    {{- else }}
+    {{- $key = genPrivateKey "rsa" }}
+    {{- end }}
+    apiVersion: v1
+    kind: Secret
+    metadata:
+      name: jwt-conn
+      namespace: apps
+      labels:
+        sdl.dev/conn: "true"
+    type: Opaque
+    data:
+      PRIVATE_KEY_PEM: {{ $key | b64enc }}
+      KID: {{ sha256sum $key | trunc 16 | b64enc }}
+      ISSUER: {{ "ad-aggregator-auth" | b64enc }}
+      AUDIENCE: {{ "ad-aggregator" | b64enc }}

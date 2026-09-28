@@ -1,0 +1,55 @@
+# bedag/raw values for release flux-bootstrap (namespace flux-system), installed by scripts/flux.sh
+# right after the flux-operator chart and the first artifact push.
+resources:
+  # Flux itself. The operator installs the controllers, then syncs the root Kustomization from the
+  # OCI artifact `make up` / `make sync` push to the kind registry (infra/ -> flux/clusters/sdl).
+  - apiVersion: fluxcd.controlplane.io/v1
+    kind: FluxInstance
+    metadata:
+      name: flux
+      namespace: flux-system
+      annotations:
+        fluxcd.controlplane.io/reconcileEvery: "1h"
+        fluxcd.controlplane.io/reconcileTimeout: "5m"
+    spec:
+      distribution:
+        version: "2.9.5"              # pinned (not a semver range): same as the flux-cli image
+        registry: ghcr.io/fluxcd
+      components:                     # no notification/image controllers: nothing to alert or automate
+        - source-controller
+        - kustomize-controller
+        - helm-controller
+      cluster:
+        type: kubernetes
+        size: medium                  # concurrency 10: the platform charts install in parallel
+        networkPolicy: true
+        domain: cluster.local
+      sync:
+        kind: OCIRepository
+        url: oci://sdl-registry:5000/sdl-infra
+        ref: latest
+        path: flux/clusters/sdl
+        interval: 10m                 # `make sync` pushes then triggers a reconcile; no need to poll
+      kustomize:
+        patches:
+          # the kind registry is plain HTTP
+          - target: { kind: OCIRepository }
+            patch: |
+              - op: add
+                path: /spec/insecure
+                value: true
+
+  # Web UI identity (flux-operator.yaml: Anonymous user "lab", group "sdl-lab") -> the chart's
+  # flux-web-admin role (read everything + reconcile/suspend/resume/restart).
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      name: sdl-lab-flux-web-admin
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: flux-web-admin
+    subjects:
+      - apiGroup: rbac.authorization.k8s.io
+        kind: Group
+        name: sdl-lab

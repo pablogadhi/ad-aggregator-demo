@@ -10,7 +10,7 @@ source "$(dirname "$0")/lib.sh"
 
 comp=${1:-}; [ -n "$comp" ] || die "usage: harvest-component.sh <component>"
 cd "$SDL_ROOT"
-[ -x "infra/components/$comp/install.sh" ] || die "infra/components/$comp/install.sh missing"
+[ -d "infra/components/$comp/flux" ] || die "infra/components/$comp/flux/ missing (the Flux base, see AUTHORING.md)"
 [ -x "infra/components/$comp/smoke.sh" ] || die "infra/components/$comp/smoke.sh missing — components need a smoke test before harvesting"
 origin=$(git remote get-url origin 2>/dev/null) || die "no 'origin' remote — is this a design created with new-design.sh?"
 

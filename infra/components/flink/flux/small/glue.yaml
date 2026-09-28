@@ -1,0 +1,64 @@
+# Plain YAML (formerly bedag/raw release flink-glue): the operator's metrics PodMonitor (ns flink-operator),
+# the job metrics PodMonitor (flink-jobs, ns apps), the stable flink-rest Service (ns apps) and apps/flink-conn.
+---
+# Operator metrics (reconcile loops, autoscaler decisions: flink_k8soperator_*)
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: flink-operator
+  namespace: flink-operator
+spec:
+  selector:
+    matchLabels: { app.kubernetes.io/name: flink-kubernetes-operator }
+  podMetricsEndpoints:
+    - port: metrics
+
+---
+# Job metrics (JobManager + TaskManagers of every FlinkDeployment in apps): busy time, backpressure,
+# Kafka source lag (pendingRecords), checkpoints — what the job autoscaler looks at, now in Grafana.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: flink-jobs
+  namespace: apps
+  annotations:
+    kustomize.toolkit.fluxcd.io/substitute: disabled   # relabel replacement "$1:9249"
+spec:
+  selector:
+    matchLabels: { type: flink-native-kubernetes }
+  podMetricsEndpoints:
+    # Flink pods don't declare the reporter port, so scrape one declared port per pod (JM rest
+    # 8081, TM rpc 6122) and point it at the pod IP on 9249.
+    - relabelings:
+        - { sourceLabels: [__meta_kubernetes_pod_container_port_number], regex: "8081|6122", action: keep }
+        - { sourceLabels: [__meta_kubernetes_pod_ip], targetLabel: __address__, replacement: "$1:9249" }
+        - { sourceLabels: [__meta_kubernetes_pod_label_app], targetLabel: flink_deployment }
+        - { sourceLabels: [__meta_kubernetes_pod_label_component], targetLabel: flink_component }
+
+---
+# Stable REST endpoint for "the" Flink job of the design: selects the JobManager of any
+# FlinkDeployment in apps. A design with several FlinkDeployments should use <name>-rest instead.
+apiVersion: v1
+kind: Service
+metadata:
+  name: flink-rest
+  namespace: apps
+spec:
+  selector:
+    type: flink-native-kubernetes
+    component: jobmanager
+  ports:
+    - { name: rest, port: 8081, targetPort: 8081 }
+
+---
+# Connection contract: Secret flink-conn in namespace apps
+apiVersion: v1
+kind: Secret
+metadata:
+  name: flink-conn
+  namespace: apps
+  labels:
+    sdl.dev/conn: "true"
+type: Opaque
+stringData:
+  REST_URL: http://flink-rest.apps.svc.cluster.local:8081

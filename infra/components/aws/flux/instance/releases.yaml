@@ -1,0 +1,17 @@
+# Helm drift detection is on: delete/edit the Floci Deployment and helm-controller restores it.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: aws
+  namespace: flux-system
+spec:
+  interval: 5m
+  releaseName: aws
+  targetNamespace: data
+  chartRef: { kind: OCIRepository, name: floci }
+  install: { remediation: { retries: 3 } }
+  upgrade: { remediation: { retries: 3 } }
+  driftDetection:
+    mode: enabled
+  valuesFrom:
+    - { kind: ConfigMap, name: aws-values, valuesKey: "${PROFILE}.yaml" }

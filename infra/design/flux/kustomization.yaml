@@ -1,0 +1,18 @@
+# Design-specific infra (Kustomization design, dependsOn every component instance): plain YAML except
+# jwt-conn, a bedag/raw HelmRelease because its key is generated once and kept via lookup.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - topics.yaml
+  - buckets.yaml
+  - gateway-policies.yaml
+  - jwt-conn.yaml
+configMapGenerator:
+  - name: design-values
+    namespace: flux-system
+    files:
+      - jwt-conn.yaml=../values/jwt-conn.yaml
+generatorOptions:
+  disableNameSuffixHash: true
+  labels:
+    reconcile.fluxcd.io/watch: Enabled

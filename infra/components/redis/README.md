@@ -6,7 +6,9 @@ and `oliver006/redis_exporter:v1.91.1` images, both digest-pinned by the chart. 
 no local chart code: `values/small.yaml` / `values/ha.yaml` are chart values, and the conn secret comes
 from the chart's `extraObjects`.
 
-`install.sh <profile> [instance]`: instance `redis` → StatefulSet/Service `redis`, pods `redis-N`,
+Flux base `flux/instance/` (Kustomization `<instance>` per `stack.yaml` entry): `OCIRepository <instance>-chart`,
+ConfigMap `<instance>-values` (both profiles), HelmRelease `<instance>` with `valuesKey: ${PROFILE}.yaml`.
+Instance `redis` → StatefulSet/Service `redis`, pods `redis-N`,
 headless `redis-headless`, secret `apps/redis-conn`. Another instance `cache` → `cache-redis-N`,
 `apps/cache-conn` (the chart prefixes the release name unless it contains `redis`).
 
@@ -65,7 +67,8 @@ kubectl -n data exec -it redis-0 -c redis -- redis-cli -c get somekey     # -c f
 kubectl -n data exec -it redis-0 -c redis -- redis-cli --cluster check localhost:6379
 ```
 
-Reset everything: `infra/components/redis/uninstall.sh [instance]` (helm uninstall + PVCs) then `make up`.
+Reset everything: remove the entry from `stack.yaml`, `make sync` (Flux uninstalls the release; the PVC
+retention policy deletes the PVCs), then put it back and `make sync` again.
 
 ## Smoke test
 

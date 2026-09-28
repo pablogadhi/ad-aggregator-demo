@@ -1,0 +1,22 @@
+# Shared namespaces: components (data), services + client (apps, deployed by Tilt), load tests (k6).
+# Charts create their own namespaces (install.createNamespace). Never pruned: apps holds Tilt's workloads.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: data
+  annotations:
+    kustomize.toolkit.fluxcd.io/prune: disabled
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: apps
+  annotations:
+    kustomize.toolkit.fluxcd.io/prune: disabled
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: k6
+  annotations:
+    kustomize.toolkit.fluxcd.io/prune: disabled

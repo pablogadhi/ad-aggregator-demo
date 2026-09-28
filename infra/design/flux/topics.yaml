@@ -1,0 +1,15 @@
+# spec §6: topic clicks — 12 partitions (= max Flink source parallelism), RF 3, minISR 2, 24 h retention.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: clicks
+  namespace: data
+  labels:
+    strimzi.io/cluster: kafka
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    min.insync.replicas: 2
+    retention.ms: 86400000
+

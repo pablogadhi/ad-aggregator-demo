@@ -1,0 +1,20 @@
+# Apache Flink Kubernetes Operator 1.16.1 (image ghcr.io/apache/flink-kubernetes-operator, tag set by the
+# chart), watches ns apps. Jobs: Flink 2.2.1 (flink:2.2.1-scala_2.12-java17) — see README.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: flink-operator
+  namespace: flux-system
+spec:
+  interval: 10m
+  releaseName: flink-operator
+  targetNamespace: flink-operator
+  chart:
+    spec:
+      chart: flink-kubernetes-operator
+      version: 1.16.1
+      sourceRef: { kind: HelmRepository, name: flink-operator }
+  install: { createNamespace: true, crds: CreateReplace, remediation: { retries: 3 } }
+  upgrade: { crds: CreateReplace, remediation: { retries: 3 } }
+  valuesFrom:
+    - { kind: ConfigMap, name: flink-operator-values, valuesKey: operator.yaml }

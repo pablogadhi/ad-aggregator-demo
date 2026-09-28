@@ -1,0 +1,21 @@
+# Platform charts as HelmReleases. Values stay in infra/platform/values/*.yaml; they reach the charts
+# through one ConfigMap (a key per file) + valuesFrom. The watch label makes helm-controller upgrade a
+# release as soon as its values change (make sync), and only when its own key changed.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespaces.yaml
+  - sources.yaml
+  - releases.yaml
+configMapGenerator:
+  - name: platform-values
+    namespace: flux-system
+    files:
+      - envoy-gateway.yaml=../../platform/values/envoy-gateway.yaml
+      - metrics-server.yaml=../../platform/values/metrics-server.yaml
+      - kube-prometheus-stack.yaml=../../platform/values/kube-prometheus-stack.yaml
+      - chaos-mesh.yaml=../../platform/values/chaos-mesh.yaml
+generatorOptions:
+  disableNameSuffixHash: true
+  labels:
+    reconcile.fluxcd.io/watch: Enabled

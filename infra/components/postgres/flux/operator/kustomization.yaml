@@ -1,0 +1,7 @@
+# Once per design (Kustomization postgres-operator, dependsOn platform-glue): the CloudNativePG operator
+# and the chart repo the instances use.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - sources.yaml
+  - releases.yaml

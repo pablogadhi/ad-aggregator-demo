@@ -27,7 +27,8 @@ To build a design from a diagram, run the **`/build-design`** skill (`.claude/sk
 | `design/`                           | diagram (input), `spec.md`, `contracts/` (openapi, events, db, config.md), `RESULTS.md` | architect (orchestrator)            |
 | `stack.yaml`                        | which components / services / pipelines / client this design runs                       | architect                           |
 | `infra/cluster/`                    | kind cluster (1 control plane + 4 workers, zones a/b/c) + local registry                | template                            |
-| `infra/platform/`                   | Envoy Gateway, cert-manager, metrics-server, Prometheus/Grafana, Chaos Mesh             | template                            |
+| `infra/flux/`                       | Flux bootstrap (operator + `FluxInstance`), root `clusters/sdl/`, platform HelmReleases + glue | template                            |
+| `infra/platform/values/`            | values for Envoy Gateway, cert-manager, metrics-server, Prometheus/Grafana, Chaos Mesh  | template                            |
 | `infra/components/<name>/`          | reusable backing infra (postgres, kafka, …) — `AUTHORING.md`, `PLAYBOOK.md`             | infra-builder                       |
 | `infra/design/`                     | design-specific infra: topics, buckets, extra DBs, gateway policies                     | infra-builder                       |
 | `infra/charts/app/`                 | generic chart for every service + the client                                            | template (infra-builder may extend) |
@@ -41,7 +42,9 @@ To build a design from a diagram, run the **`/build-design`** skill (`.claude/sk
 |                                                                                         |                                                                                   |
 | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
 | `make doctor`                                                                           | read-only environment check                                                       |
-| `make up` / `make down`                                                                 | cluster + platform + `stack.yaml` components (+ `infra/design/`) / delete cluster |
+| `make up` / `make down`                                                                 | cluster + Flux, which installs platform + `stack.yaml` components + `infra/design/` / delete cluster |
+| `make sync`                                                                             | after editing `infra/` or `stack.yaml`: push `infra/` to Flux, wait until reconciled |
+| `scripts/flux.sh <args>`                                                                | Flux CLI from its Docker image: `get all -A`, `suspend kustomization kafka`, …    |
 | `make smoke [C=<component>]`                                                            | component smoke tests (real reads/writes, not just "Running")                     |
 | `make test`                                                                             | unit tests for all services + scripts (no cluster)                                |
 | `make ci`                                                                               | Tilt headless: build + deploy services/pipelines/client, then run `tests/e2e`     |
@@ -52,7 +55,7 @@ To build a design from a diagram, run the **`/build-design`** skill (`.claude/sk
 | `make harvest C=<component>`                                                            | push a new component back to the template as branch `component/<name>`            |
 
 URLs: app `http://localhost:8080` (services at `/api/<service>/…`), `grafana.localhost:8080`
-(admin/admin), `prometheus.localhost:8080`, `chaos.localhost:8080`.
+(admin/admin), `prometheus.localhost:8080`, `chaos.localhost:8080`, `flux.localhost:8080` (Flux web UI).
 
 ## Conventions
 
@@ -80,6 +83,11 @@ URLs: app `http://localhost:8080` (services at `/api/<service>/…`), `grafana.l
   NodePort mapped to `localhost:8080`.
 
 ## Gotchas learned the hard way
+
+- **Flux owns `infra/`** (platform, components, design): `make up` bootstraps it, `make sync` pushes edits
+  (an OCI artifact in the kind registry, no Git remote). Manual `kubectl`/`helm` changes to those objects
+  are reverted — `scripts/flux.sh suspend kustomization <name>` first (see `chaos/README.md`). Services,
+  pipelines and the client stay on Tilt.
 
 - Commands that need Docker or the cluster (`make up/ci/e2e/smoke/load/chaos…`, `kubectl`, `helm`,
   `docker`, `kind`, `tilt`, `k6`) run outside the Claude Code sandbox via `excludedCommands` in

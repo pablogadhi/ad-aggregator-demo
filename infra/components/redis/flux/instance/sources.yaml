@@ -1,0 +1,13 @@
+# Per instance (named after it) so several redis instances never share/prune one source object.
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: ${INSTANCE}-chart
+  namespace: flux-system
+spec:
+  interval: 24h
+  url: oci://registry-1.docker.io/cloudpirates/redis
+  ref: { tag: 0.35.4 }      # app 8.10.2: docker.io/redis + oliver006/redis_exporter v1.91.1, digest-pinned by the chart
+  layerSelector:
+    mediaType: application/vnd.cncf.helm.chart.content.v1.tar+gzip
+    operation: copy
