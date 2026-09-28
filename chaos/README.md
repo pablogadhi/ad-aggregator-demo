@@ -9,7 +9,15 @@ make chaos-clear                      # remove all of them
 chaos/node-down.sh zone-a             # stop every node in zone-a; --restore to bring them back
 ```
 
-Run experiments **under load** so you can see the effect: `make load &` then apply the experiment ~15s in.
+Run experiments **under load** so you can see the effect: `make load S=chaos &` then apply the experiment
+~60s in. Load runs in-cluster via k6-operator (`loadtest/README.md`); for an experiment that stops a
+whole zone (#7, `node-down.sh`), pin the load's runners off that zone first with `AVOID_ZONE=<zone>` —
+otherwise a runner pod can land on the node about to go down and the load stalls with it:
+
+```bash
+AVOID_ZONE=zone-b RATE=300 DURATION=5m make load S=chaos RUN=zone-down &
+sleep 60 && chaos/node-down.sh sdl-worker2
+```
 
 | Experiment              | What it does                                             | Verified behaviour on the sample stack                                                                                                                          |
 | ----------------------- | -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -19,12 +27,26 @@ Run experiments **under load** so you can see the effect: `make load &` then app
 
 ## ad-aggregator experiments (design/spec.md §11)
 
-Every run: start the load, inject the fault ~60 s in, then reconcile and re-run the acceptance flows:
+Every run: start the load, inject the fault ~60 s in, then let `make load` finish (it reconciles on its
+own), and re-run the acceptance flows. In-cluster (primary), `make load` runs `ad-aggregator.js` and
+`reconcile.js` as TestRuns and prints the aggregated gates + reconcile PASS/FAIL itself:
 
 ```bash
-k6 run -e BASE_URL=http://localhost:8080 -e SCENARIO=chaos -e RUN=<exp> --out csv=loadtest/results/<exp>.csv loadtest/ad-aggregator.js
+make load S=chaos RUN=<exp> &                           # [AVOID_ZONE=<zone>] for a zone-down experiment
+sleep 60 && make chaos E=<exp>                           # or the command in the table
+wait                                                     # make load's own reconcile + gates
+make chaos-clear && make e2e
+```
+
+For a per-10s error%/p95 timeline (`timeline.py`), use the host k6 fallback instead (it writes a local
+CSV the in-cluster runners don't have a shared filesystem for):
+
+```bash
+k6 run -e BASE_URL=http://localhost:8080 -e SCENARIO=chaos -e RUN=<exp> \
+  -e K6_PROMETHEUS_RW_SERVER_URL=http://localhost:8080/api/v1/write -e PROM_URL=http://localhost:8080 \
+  --out experimental-prometheus-rw --tag testid=<exp> --out csv=loadtest/results/<exp>.csv loadtest/ad-aggregator.js
 make chaos E=<exp>                                      # ~60 s into the run (or the command in the table)
-k6 run -e BASE_URL=http://localhost:8080 -e RUN=<exp> loadtest/reconcile.js     # k6 accepted == analytics totals
+k6 run -e BASE_URL=http://localhost:8080 -e RUN=<exp> -e PROM_URL=http://localhost:8080 -e PROM_HOST=prometheus.localhost loadtest/reconcile.js
 python3 loadtest/timeline.py loadtest/results/<exp>.csv                        # error % + p95 per 10 s
 make chaos-clear && make e2e
 ```

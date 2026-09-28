@@ -35,8 +35,8 @@ test: ## unit tests: all services + repo scripts (no cluster needed)
 e2e: ## acceptance flows against the live cluster
 	@$(ENV) cd tests/e2e && { uv run pytest -q; rc=$$?; [ $$rc -eq 5 ] && echo "no e2e tests yet" && rc=0; exit $$rc; }
 
-load: ## k6 load test (S=<script>, default loadtest/sample.js)
-	@$(ENV) k6 run -e BASE_URL=$$SDL_GATEWAY_URL $(or $(S),loadtest/sample.js)
+load: ## in-cluster k6 load test via k6-operator (S=<scenario: clicks|hot|scale|chaos>, RUN=<id>); loadtest/run.sh
+	@$(ENV) loadtest/run.sh $(or $(S),clicks)
 
 chaos: ## apply a chaos experiment (E=<chaos/*.yaml name, without .yaml>)
 	@$(ENV) kubectl --context $$SDL_CLUSTER apply -f chaos/$(E).yaml

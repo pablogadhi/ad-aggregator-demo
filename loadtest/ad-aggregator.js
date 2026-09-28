@@ -1,7 +1,13 @@
-// Load test for ad-aggregator (design/spec.md §10). Run from the repo root:
+// Load test for ad-aggregator (design/spec.md §10). In-cluster (primary): `make load S=clicks`
+// (see loadtest/run.sh) runs this as a k6-operator TestRun, 3 runners spread across zones, results
+// pushed to Prometheus remote write tagged `testid=<RUN>`. Host k6 fallback, from the repo root:
 //
-//   k6 run -e BASE_URL=http://localhost:8080 [-e SCENARIO=clicks|hot|scale|chaos] [-e RUN=name] loadtest/ad-aggregator.js
-//   k6 run -e BASE_URL=http://localhost:8080 -e RUN=name loadtest/reconcile.js     # afterwards
+//   k6 run -e BASE_URL=http://localhost:8080 -e SCENARIO=clicks -e RUN=<id> \
+//     -e K6_PROMETHEUS_RW_SERVER_URL=http://localhost:8080/api/v1/write \
+//     -e PROM_URL=http://localhost:8080 --out experimental-prometheus-rw --tag testid=<id> loadtest/ad-aggregator.js
+//   RUN_STARTED_AT=<iso> RUN_ENDED_AT=<iso> k6 run -e BASE_URL=http://localhost:8080 -e RUN=<id> loadtest/reconcile.js
+//
+// (host reconcile needs a Host: prometheus.localhost header on PROM_URL requests; see loadtest/README.md)
 //
 // SCENARIO (default clicks):
 //   clicks  500 rps x 5 min, then 1,000 rps x 1 min (uniform ads) + 20 rps analytics queries
@@ -10,8 +16,9 @@
 //   chaos   300 rps x 5 min (spec §11); HOT=1 adds the 20 % hot ad (chaos #9). DURATION/RATE override.
 //
 // Setup creates 100 advertisers x 20 ads through the API (fresh every run). Every VU counts
-// `X-Click-Status: accepted` per advertiser (metrics acc_000..acc_099); handleSummary writes them to
-// loadtest/results/<RUN>.json and reconcile.js compares them with the analytics totals.
+// `X-Click-Status: accepted` in a Counter tagged `advertiser` (the real advertiser id) so
+// reconcile.js can read per-advertiser accepted counts back from Prometheus (no shared result file
+// across the parallel runner pods).
 import http from 'k6/http';
 import { check } from 'k6';
 import exec from 'k6/execution';
@@ -25,11 +32,10 @@ const ADS_PER_ADV = 20;
 const USER_POOL = 1000000;
 const HOT = SCENARIO === 'hot' || __ENV.HOT === '1';
 const HOT_SHARE = 0.2;
-const PROM = __ENV.PROM_URL || BASE; // Prometheus through the gateway (Host: prometheus.localhost)
+const PROM = __ENV.PROM_URL || BASE; // Prometheus: in-cluster service URL (TestRun) or gateway w/ Host header (host fallback)
 
 // ---- metrics --------------------------------------------------------------------------------
-const accByAdv = [];
-for (let i = 0; i < N_ADV; i++) accByAdv.push(new Counter(`acc_${String(i).padStart(3, '0')}`));
+const acceptedByAdv = new Counter('clicks_accepted_adv'); // tagged { advertiser: <id> }
 const accepted = new Counter('clicks_accepted');
 const duplicate = new Counter('clicks_duplicate');
 const unavailable = new Counter('clicks_503');
@@ -170,7 +176,7 @@ export function click(data) {
     const status = res.headers['X-Click-Status'];
     if (status === 'accepted') {
       accepted.add(1);
-      accByAdv[advIdx].add(1);
+      acceptedByAdv.add(1, { advertiser: String(data.advertisers[advIdx]) });
     } else if (status === 'duplicate') {
       duplicate.add(1);
     } else {
@@ -252,10 +258,6 @@ function metricVal(data, name, stat) {
 
 export function handleSummary(data) {
   const setup = data.setup_data || {};
-  const perAdv = {};
-  (setup.advertisers || []).forEach((id, i) => {
-    perAdv[id] = metricVal(data, `acc_${String(i).padStart(3, '0')}`, 'count') || 0;
-  });
   const out = {
     run: setup.runId,
     scenario: SCENARIO,
@@ -267,12 +269,10 @@ export function handleSummary(data) {
     duplicate_total: metricVal(data, 'clicks_duplicate', 'count') || 0,
     unavailable_503: metricVal(data, 'clicks_503', 'count') || 0,
     other: metricVal(data, 'clicks_other', 'count') || 0,
-    accepted_by_advertiser: perAdv,
   };
   const lines = [];
-  lines.push(`\n=== ad-aggregator load: scenario=${SCENARIO} run=${out.run} ===`);
+  lines.push(`\n=== ad-aggregator load: scenario=${SCENARIO} run=${out.run} testid=${RUN} ===`);
   for (const [name, m] of Object.entries(data.metrics).sort()) {
-    if (name.startsWith('acc_')) continue;
     const v = m.values;
     const th = m.thresholds ? Object.entries(m.thresholds).map(([k, r]) => `${k}:${r.ok ? 'ok' : 'FAIL'}`).join(' ') : '';
     let s;
@@ -285,9 +285,6 @@ export function handleSummary(data) {
     }
   }
   lines.push(`accepted=${out.accepted_total} duplicate=${out.duplicate_total} 503=${out.unavailable_503} other=${out.other}`);
-  lines.push(`results -> loadtest/results/${RUN}.json (then: k6 run -e BASE_URL=${BASE} -e RUN=${RUN} loadtest/reconcile.js)\n`);
-  return {
-    stdout: lines.join('\n'),
-    [`loadtest/results/${RUN}.json`]: JSON.stringify(out, null, 1),
-  };
+  lines.push(`per-advertiser accepted counts + ambiguous (503+other) are in Prometheus, tagged testid=${RUN}; run reconcile.js next\n`);
+  return { stdout: lines.join('\n') };
 }
