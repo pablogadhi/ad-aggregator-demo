@@ -7,7 +7,13 @@
 FROM maven:3.9.16-eclipse-temurin-17 AS build
 WORKDIR /src
 COPY job/pom.xml .
-RUN --mount=type=cache,target=/root/.m2 mvn -B -q dependency:resolve dependency:resolve-plugins
+# Retried: right after Docker Desktop starts, the first request to Maven Central often fails, and
+# Maven then reports it as "No plugin found for prefix 'dependency'" (seen twice on a fresh `make ci`).
+RUN --mount=type=cache,target=/root/.m2 \
+    for i in 1 2 3 4; do \
+      mvn -B -q dependency:resolve dependency:resolve-plugins && exit 0; \
+      echo "maven pre-fetch failed (attempt $i), retrying in $((i * 5))s" >&2; sleep $((i * 5)); \
+    done; exit 1
 COPY job/src ./src
 ARG SKIP_TESTS=false
 RUN --mount=type=cache,target=/root/.m2 \
