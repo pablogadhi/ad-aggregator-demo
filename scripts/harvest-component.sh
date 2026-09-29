@@ -12,18 +12,21 @@ comp=${1:-}; [ -n "$comp" ] || die "usage: harvest-component.sh <component>"
 cd "$SDL_ROOT"
 [ -d "infra/components/$comp/flux" ] || die "infra/components/$comp/flux/ missing (the Flux base, see AUTHORING.md)"
 [ -x "infra/components/$comp/smoke.sh" ] || die "infra/components/$comp/smoke.sh missing — components need a smoke test before harvesting"
-origin=$(git remote get-url origin 2>/dev/null) || die "no 'origin' remote — is this a design created with new-design.sh?"
+# the template is the 'template' remote (designs published to their own repo); older designs: 'origin'
+remote=template
+git remote get-url "$remote" >/dev/null 2>&1 || remote=origin
+url=$(git remote get-url "$remote" 2>/dev/null) || die "no 'template' (or 'origin') remote pointing at the template — is this a design created with new-design.sh?"
 
-git fetch -q origin main
+git fetch -q "$remote" main
 wt="$SDL_ROOT/.cache/harvest-$comp"
 rm -rf "$wt"; git worktree prune
-git worktree add -q --detach "$wt" origin/main
+git worktree add -q --detach "$wt" "$remote/main"
 trap 'git -C "$SDL_ROOT" worktree remove --force "$wt" >/dev/null 2>&1 || true' EXIT
 
 rm -rf "$wt/infra/components/$comp"
 cp -r "infra/components/$comp" "$wt/infra/components/$comp"
 files=("infra/components/$comp")
-if ! git diff --quiet origin/main -- infra/components/PLAYBOOK.md 2>/dev/null; then
+if ! git diff --quiet "$remote/main" --infra/components/PLAYBOOK.md 2>/dev/null; then
   cp infra/components/PLAYBOOK.md "$wt/infra/components/PLAYBOOK.md"
   files+=("infra/components/PLAYBOOK.md")
 fi
@@ -33,6 +36,6 @@ if git -C "$wt" diff --cached --quiet; then
   ok "template already has this version of '$comp' — nothing to harvest"; exit 0
 fi
 git -C "$wt" commit -qm "component: $comp (harvested from design $(basename "$SDL_ROOT"))"
-git -C "$wt" push -qf origin "HEAD:refs/heads/component/$comp"
-ok "pushed component/$comp to $origin"
+git -C "$wt" push -qf "$remote" "HEAD:refs/heads/component/$comp"
+ok "pushed component/$comp to $url"
 echo "   review + merge in the template:  git diff main...component/$comp && git merge component/$comp"

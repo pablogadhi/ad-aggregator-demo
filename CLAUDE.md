@@ -3,7 +3,8 @@
 A local, multi-node Kubernetes lab for building system designs end to end: infra components,
 FastAPI services, stream pipelines and a thin Next.js client, verified with e2e tests, load tests
 and chaos experiments. Nothing is deployed to a cloud. **One design per repo** (created with
-`scripts/new-design.sh` from the template; `origin` = the template).
+`scripts/new-design.sh` from the template; remote `template` = the template, `origin` = this
+design's own repo, if published).
 
 To build a design from a diagram, run the **`/build-design`** skill (`.claude/skills/build-design/`).
 

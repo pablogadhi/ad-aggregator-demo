@@ -1,4 +1,61 @@
-# System Design Lab
+# Ad Click Aggregator (demo)
+
+An ad click aggregator built end to end on a local multi-zone Kubernetes cluster. Every click is
+redirected in milliseconds, counted exactly once per minute by a Flink pipeline, and queryable by
+advertisers. Then it's broken on purpose (zone loss, broker/DB/Redis kills, drift) to show it holds.
+
+```
+browser ──302── click-receiver ×4–18 ──acks=all──▶ Kafka `clicks` (12 part, RF3) ──▶ Flink click-aggregator (3–12)
+   │              │  dedup + hot-ad state                                               │ two-stage count, S3 checkpoints
+   │              └──▶ Redis Cluster 3+3                                               ▼
+   │                                                              analytics-db (CNPG ×3) ◀── analytics ×2
+   └── Envoy Gateway ×3 (JWT on ad-placement/analytics) ── auth ×2, ad-placement ×2 ──▶ postgres (CNPG ×3)
+```
+
+- **Stack:** kind (5 nodes, 3 zones) · Flux (GitOps from an OCI artifact) · every component from
+  pinned Artifact Hub charts: CloudNativePG, Strimzi Kafka, Redis Cluster, Flink operator, Floci (S3)
+  · Envoy Gateway · FastAPI services · Next.js client · k6-operator · Chaos Mesh · Prometheus/Grafana.
+- **Click path:** ad lookup (cache → read replica → primary) → dedup in Redis (fails open) → salted
+  key for hot ads → Kafka `acks=all`, waiting for the ack (1 s deadline, load shedding) → 302.
+
+## Results (highlights)
+
+| Check | Result |
+| ----- | ------ |
+| Acceptance flows | e2e **27/27** through the gateway |
+| Load, 500 rps + 1,000 rps burst (in-cluster k6, 3 zones) | p95 **11.9 ms** steady / **16.9 ms** burst, 0 % errors, counts reconcile **exactly** |
+| Zone-b node down | **99.976 %** of clicks OK, ~15 s error window, lost = 0 |
+| All 6 Redis pods killed under load | **0 click errors**, cluster re-forms by itself |
+| Kafka broker / Flink TaskManager / DB primary kills | ≤ 0.01 % errors, lost = 0 |
+| Drift (delete a Flux-managed Secret + Deployment) | restored by Flux within seconds |
+
+Full numbers, findings and trade-offs: [`design/RESULTS.md`](design/RESULTS.md). Spec and contracts:
+[`design/spec.md`](design/spec.md), [`design/contracts/`](design/contracts/); original diagram:
+[`design/diagram.excalidraw`](design/diagram.excalidraw).
+
+## Run it
+
+```bash
+make doctor          # read-only check: tools, Docker, kernel limits (installs nothing)
+make up              # kind cluster + Flux; Flux installs platform, components, design (~9 min cold)
+make ci              # Tilt: build + deploy services, pipeline, client; run the e2e tests
+make load S=clicks   # in-cluster k6 + aggregated gates + reconcile
+make chaos E=<name>  # see chaos/README.md
+make down
+```
+
+App <http://localhost:8080> · Flux UI `flux.localhost:8080` · Kafka UI `kafka-ui.localhost:8080` ·
+Grafana `grafana.localhost:8080` (admin/admin) · Prometheus `prometheus.localhost:8080` · Chaos Mesh
+`chaos.localhost:8080`.
+
+Tools you need (the lab never installs them): docker, kind, kubectl, helm, ctlptl, tilt, uv, node,
+pnpm, python3. To use kubectl/helm against the lab from your shell: `source scripts/env.sh`
+(kubeconfig and helm state live in the repo, your `~/.kube/config` is untouched).
+
+Built on [system-design-lab](https://github.com/pablogadhi/system-design-lab); the rest of this
+README describes that lab.
+
+## The lab it's built on
 
 Build system designs end to end on a local multi-node Kubernetes cluster, then break them on purpose.
 Draw a design in Excalidraw, hand it to Claude Code, and get working infra + services + a demo client,
@@ -22,24 +79,7 @@ verified by e2e tests, load tests and chaos experiments.
   platform: cert-manager · metrics-server · Prometheus + Grafana · Chaos Mesh · local registry :5005
 ```
 
-## Quick start
-
-```bash
-make doctor          # read-only check: tools, Docker, kernel limits (installs nothing)
-make up              # cluster + platform + components from stack.yaml   (~5 min first time)
-make smoke           # components really work (writes/reads, replication)
-make ci              # build + deploy services and client with Tilt, then run the e2e tests
-open http://localhost:8080          # the demo client
-make load            # k6 against the gateway
-make chaos E=postgres-primary-kill  # break something (see chaos/README.md)
-make down
-```
-
-Tools you need (the lab never installs them): docker, kind, kubectl, helm, ctlptl, tilt, uv, node,
-pnpm, k6, python3. To use kubectl/helm against the lab from your shell: `source scripts/env.sh`
-(kubeconfig and helm state live in the repo, your `~/.kube/config` is untouched).
-
-## Building a design
+### Building a design
 
 ```bash
 # 1. In Excalidraw: File → Save to… (.excalidraw) and Export image (.png)
@@ -59,30 +99,26 @@ cd ../ad-aggregator && claude
    back to the owning builder until green.
 4. **Results** in `design/RESULTS.md`; new components are proposed for harvesting back into the template.
 
-## Components: built on demand, harvested back
+### Components: built on demand, harvested back
 
-The template only ships Postgres (CloudNativePG). Everything else (Kafka, Redis, Elasticsearch,
-Cassandra, Flink, Temporal, AWS emulation) is built the first time a design needs it, following
-`infra/components/AUTHORING.md` and the researched approaches in `infra/components/PLAYBOOK.md`.
-Then `make harvest C=kafka` pushes it to the template as branch `component/kafka`; merge it there and
-every later design reuses it.
+Components are Flux bases over existing Artifact Hub charts, built the first time a design needs
+them, following `infra/components/AUTHORING.md` and the researched approaches in
+`infra/components/PLAYBOOK.md`. Then `make harvest C=kafka` pushes one to the template as branch
+`component/kafka`; merge it there and every later design reuses it.
 
-## The sample stack
-
-`stack.yaml` ships a tiny sample (Postgres ha + `services/sample-api` + a client page) that proves the
-whole toolchain works; `new-design.sh` removes it. Sample files: `services/sample-api/`,
-`design/spec.md`, `design/contracts/{openapi/sample-api.yaml,db/postgres.sql}`,
-`client/src/api/sample-api.ts`, `tests/e2e/test_sample.py`, `loadtest/sample.js`.
-
-## Layout
+### Layout
 
 See `CLAUDE.md` for the full ownership map and conventions.
 
 ```
 design/      input diagram + spec + contracts        infra/cluster/     kind + registry (ctlptl)
-services/    FastAPI uv workspace (+ sdl_common)     infra/platform/    gateway, monitoring, chaos
+services/    FastAPI uv workspace (+ sdl_common)     infra/flux/        Flux bootstrap + platform
 pipelines/   stream jobs (Flink)                     infra/components/  reusable backing infra
 client/      Next.js demo                            infra/design/      design-specific infra
 tests/e2e/   acceptance flows                        infra/charts/app/  generic workload chart
 loadtest/    k6 scripts          chaos/  experiments  scripts/          lab tooling
 ```
+
+## License
+
+[MIT](LICENSE)
