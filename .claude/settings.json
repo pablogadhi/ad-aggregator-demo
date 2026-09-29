@@ -12,13 +12,15 @@
       "make load *",
       "make chaos *",
       "make chaos-clear",
+      "make sync",
       "docker *",
       "kind *",
       "ctlptl *",
       "tilt *",
       "k6 *",
       "kubectl *",
-      "helm *"
+      "helm *",
+      "scripts/flux.sh *"
     ],
     "filesystem": { "allowWrite": ["~/.cache/uv"] },
     "network": {
