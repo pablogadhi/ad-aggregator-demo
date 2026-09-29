@@ -27,10 +27,14 @@ import orjson
 from click_receiver import metrics
 from click_receiver.ads import Ad, AdCache, AdLookupError
 from click_receiver.hot import HotTracker
+from click_receiver.resilience import RateLimitedLog
 from click_receiver.settings import Settings
 from click_receiver.store import ClickStore, dedup_key
 
 log = logging.getLogger("click_receiver")
+# A broken dependency fails many clicks per second; one line per 10 s per kind (with the number
+# suppressed) is enough, the metrics count every click. Log volume competes with the clicks for CPU.
+rlog = RateLimitedLog(log, interval=10.0)
 
 
 class Producer(Protocol):
@@ -162,7 +166,8 @@ class ClickService:
         except Exception as exc:  # noqa: BLE001
             status = "ambiguous" if possibly_persisted(exc) else "rejected"
             metrics.CLICKS.labels(status, hot_label).inc()
-            log.warning(
+            rlog.warning(
+                f"not-recorded-{status}",
                 "click not recorded",
                 extra={"extra_fields": {"ad_id": ad_id, "outcome": status, "error": str(exc)}},
             )
@@ -182,4 +187,4 @@ class ClickService:
             async with asyncio.timeout(max(self.redis_safety_timeout, 0.1)):
                 await self.store.release(key)
         except Exception as exc:  # noqa: BLE001
-            log.warning("dedup key release failed: %s", exc)
+            rlog.warning("release", "dedup key release failed: %s", exc)

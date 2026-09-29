@@ -33,3 +33,18 @@ REDIS_SLOT_REFRESHES = Counter(
     ["reason", "result"],
 )
 WARMUP_SECONDS = Gauge("click_warmup_seconds", "Duration of the warm-up before readiness")
+REDIS_BREAKER_TRIPS = Counter(
+    "click_redis_breaker_trips_total",
+    "Times a Redis node's dedup circuit breaker opened (consecutive failures on that node)",
+)
+REDIS_BREAKER_SKIPS = Counter(
+    "click_redis_breaker_skips_total",
+    "Dedup checks skipped (failed open without a Redis call) because the key's node breaker was open; "
+    "also counted in click_dedup_failopen_total",
+)
+REDIS_BREAKER_OPEN = Gauge("click_redis_breaker_open_nodes", "Redis nodes whose dedup breaker is open")
+HOT_LOOP_BACKOFF = Gauge(
+    "hot_loop_backoff_seconds",
+    "Current delay of a hot-ad background loop (its interval unless failing)",
+    ["loop"],
+)

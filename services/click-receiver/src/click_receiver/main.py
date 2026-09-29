@@ -43,15 +43,14 @@ def producer_config(bootstrap_servers: str, security_protocol: str, s: Settings)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Imported here so unit tests (which never run the lifespan) need no connection env vars.
-    from redis.asyncio.retry import Retry
-    from redis.backoff import NoBackoff
     from sdl_common.kafka import AsyncProducer, KafkaSettings
     from sdl_common.postgres import Database, PostgresSettings
-    from sdl_common.redis import RedisSettings, connect
+    from sdl_common.redis import RedisSettings
 
     from click_receiver.ads import AdCache, PostgresAds
     from click_receiver.hot import HotTracker
-    from click_receiver.redis_cluster import FastRedisCluster, SlotMapRefresher
+    from click_receiver.redis_cluster import build_clients
+    from click_receiver.resilience import NodeBreaker
     from click_receiver.store import RedisClickStore
     from click_receiver.warmup import Warmup
 
@@ -60,27 +59,15 @@ async def lifespan(app: FastAPI):
     async with Database(PostgresSettings()) as db:
         repo = PostgresAds(db, timeout=s.db_timeout_ms / 1000)
         ads = AdCache(repo, s.ad_cache_ttl_seconds, s.ad_cache_max_entries)
-        budget = s.redis_timeout_ms / 1000
-        # Per-click client: no retries, and REDIS_TIMEOUT_MS bounds the socket I/O (connect and
-        # each read), not the wall-clock time incl. event-loop queueing — see service.py.
-        fast_kwargs = dict(
-            socket_timeout=budget,
-            socket_connect_timeout=budget,
-            retry=Retry(NoBackoff(), 0),
-            decode_responses=True,
+        # fast (per click: REDIS_TIMEOUT_MS, no retries) + bg (hot-ad batches); cluster mode adds
+        # slot-map refreshers — see redis_cluster.build_clients
+        fast, bg, refreshers = build_clients(rs.url, rs.mode, s)
+        breaker = NodeBreaker(
+            threshold=s.redis_breaker_after_failures,
+            base=s.redis_breaker_open_ms / 1000,
+            cap=s.redis_breaker_max_open_ms / 1000,
         )
-        if rs.mode == "cluster":
-            fast = FastRedisCluster.from_url(rs.url, **fast_kwargs)
-        else:
-            fast = connect(rs, **fast_kwargs)
-        refresher = SlotMapRefresher.for_client(
-            fast,
-            threshold=s.redis_slot_refresh_after_failures,
-            min_interval=s.redis_slot_refresh_min_interval_ms / 1000,
-            interval=s.redis_slot_refresh_interval_ms / 1000,
-        )
-        bg = connect(rs, socket_timeout=1.0, socket_connect_timeout=1.0)
-        store = RedisClickStore(fast, bg, refresher)
+        store = RedisClickStore(fast, bg, refreshers[0] if refreshers else None, breaker)
         producer = AsyncProducer(producer_config(ks.bootstrap_servers, ks.security_protocol, s)).start()
         hot = HotTracker(store, s)
         app.state.service = ClickService(s, ads, store, producer, hot)
@@ -111,14 +98,14 @@ async def lifespan(app: FastAPI):
         ]
         warmup.start()
         hot.start()
-        if refresher is not None:
+        for refresher in refreshers:
             refresher.start()
         try:
             yield
         finally:
             # uvicorn has drained in-flight requests by now: flush counters, then the producer
             await warmup.stop()
-            if refresher is not None:
+            for refresher in refreshers:
                 await refresher.stop()
             await hot.stop()
             await producer.close(flush_timeout=10)

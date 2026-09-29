@@ -77,32 +77,66 @@ def _ok(result) -> bool:
     return not isinstance(result, BaseException)
 
 
+class RedisUnavailable(Exception):
+    """The key's Redis node is failing (its breaker is open): skipped without a call; the caller
+    fails open exactly as for a Redis error."""
+
+
 class RedisClickStore:
     """`fast` serves the per-click dedup (tight socket timeout, no retries: the caller fails open);
-    `bg` serves the batched hot-ad work (longer timeouts, retries), so slow background batches
-    never queue in front of a click's SET NX.
+    `bg` serves the batched hot-ad work (longer timeouts; its callers retry with backoff), so slow
+    background batches never queue in front of a click's SET NX.
 
     `refresher` (cluster mode only, see redis_cluster.py) is told about every per-click command's
-    outcome so repeated failures on one node trigger a slot-map refresh."""
+    outcome so repeated failures on one node trigger a slot-map refresh.
 
-    def __init__(self, fast, bg, refresher=None):
+    `breaker` (resilience.NodeBreaker, optional) short-circuits the dedup for keys whose node keeps
+    failing: while Redis is down (CLUSTERDOWN, a dead node, timeouts) clicks fail open without
+    touching it instead of each paying a timeout and a fresh connection; one click at a time probes
+    the node, with capped exponential backoff between probes."""
+
+    def __init__(self, fast, bg, refresher=None, breaker=None):
         self.fast = fast
         self.bg = bg
         self.refresher = refresher
+        self.breaker = breaker
+        self._node_of_key = getattr(fast, "get_node_from_key", None)  # cluster clients only
+
+    def _node(self, key: str) -> str:
+        if self._node_of_key is None:
+            return "standalone"
+        try:
+            node = self._node_of_key(key)
+        except Exception:  # noqa: BLE001 — slot map not loaded / slot not covered
+            return "?"
+        return node.name if node is not None else "?"
 
     # -- hot path: exactly one round trip per click ---------------------------------------
     async def claim(self, key: str, click_id: str, ttl: int) -> bool:
-        if self.refresher is None:
+        breaker, node = self.breaker, None
+        if breaker is not None and not breaker.idle:  # something is failing: route the key
+            node = self._node(key)
+            if not breaker.allow(node):
+                raise RedisUnavailable(node)
+        if self.refresher is None and breaker is None:
             return bool(await self.fast.set(key, click_id, nx=True, ex=ttl))
         try:
             ok = bool(await self.fast.set(key, click_id, nx=True, ex=ttl))
         except BaseException:  # incl. the caller's safety timeout cancelling us
-            self.refresher.failure(key)
+            if self.refresher is not None:
+                self.refresher.failure(key)
+            if breaker is not None:
+                breaker.failure(node or self._node(key))
             raise
-        self.refresher.success(key)
+        if self.refresher is not None:
+            self.refresher.success(key)
+        if breaker is not None and not breaker.idle:
+            breaker.success(node or self._node(key))
         return ok
 
     async def release(self, key: str) -> None:
+        if self.breaker is not None and not self.breaker.idle and self.breaker.is_open(self._node(key)):
+            return  # best effort anyway (spec §5.1 step 4); don't wait on a node known to be failing
         await self.fast.delete(key)
 
     async def connect(self) -> None:

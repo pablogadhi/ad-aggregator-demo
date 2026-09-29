@@ -18,6 +18,19 @@ node. So for this client:
 
 Standalone Redis needs none of this (there is no slot map): `SlotMapRefresher.for_client()`
 returns None for it.
+
+CLUSTERDOWN (measured: the whole cluster in `cluster_state:fail` for 25 min, nodes up but
+answering every command with `-CLUSTERDOWN`): redis-py reacts to *each* ClusterDownError /
+SlotNotCoveredError (and to every 5th MOVED) with `aclose()` — disconnect every connection to every
+node, including the ones other clicks are using — then `sleep(0.25)`, and the next command pays a
+full re-initialisation (CLUSTER SLOTS + the ~200 KB COMMAND reply parsed in pure Python, tens of ms
+of CPU with the loop blocked) behind a client-wide lock that every click queues on. Hundreds of
+clicks/s turned that into a reconnect + re-init storm: every click spent its whole 200 ms safety
+timeout in Redis and the loop stalled until the liveness probes timed out. So `FastRedisCluster`
+also replaces redis-py's per-command error handling (`_execute_command`): one attempt, a MOVED/ASK
+redirect followed once (MOVED patches the slot table in place), and every other error raised as is,
+with no client-wide teardown — the caller fails open / backs off, and the refresher (throttled, with
+backoff) re-reads the slot map.
 """
 
 from __future__ import annotations
@@ -29,11 +42,19 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from redis.asyncio.cluster import RedisCluster
+from redis.asyncio.cluster import ClusterNode, RedisCluster
+from redis.asyncio.retry import Retry
+from redis.backoff import NoBackoff
+from redis.cluster import get_node_name
+from redis.exceptions import AskError, MovedError
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from click_receiver import metrics
+from click_receiver.resilience import RateLimitedLog
 
 log = logging.getLogger("click_receiver.redis")
+rlog = RateLimitedLog(log, interval=10.0)
 
 
 class SlotMapRefresher:
@@ -53,6 +74,10 @@ class SlotMapRefresher:
         self.clock = clock
         self._failures: dict[str, int] = {}  # node name -> consecutive failures
         self._last = float("-inf")
+        # failure-triggered refreshes since the last success: each one that didn't help doubles
+        # the gap before the next (min_interval, 2x, 4x, ... capped at the periodic interval), so
+        # a cluster that stays down gets CLUSTER SLOTS every ~10 s, not every second
+        self._unhelpful = 0
         self._running: asyncio.Task | None = None
         self._periodic: asyncio.Task | None = None
 
@@ -76,8 +101,8 @@ class SlotMapRefresher:
     def success(self, key: str) -> None:
         if self._failures:  # the common case (no failures) costs one dict truthiness check
             name = self._node(key)
-            if name is not None:
-                self._failures.pop(name, None)
+            if name is not None and self._failures.pop(name, None) is not None:
+                self._unhelpful = 0
 
     def failure(self, key: str) -> None:
         name = self._node(key) or "?"
@@ -86,12 +111,23 @@ class SlotMapRefresher:
             self.request("failures", failed_node=name)
 
     # -- refreshing ---------------------------------------------------------------------------
+    @property
+    def gap(self) -> float:
+        """Minimum time between two refreshes (grows while failure-triggered ones don't help)."""
+        if self._unhelpful <= 1:
+            return self.min_interval
+        return min(
+            self.min_interval * 2 ** min(self._unhelpful - 1, 30), max(self.interval, self.min_interval)
+        )
+
     def request(self, reason: str, failed_node: str | None = None) -> bool:
-        """Start a background slot-map refresh unless one ran < min_interval ago or is running."""
+        """Start a background slot-map refresh unless one ran < `gap` ago or is running."""
         now = self.clock()
-        if (self._running is not None and not self._running.done()) or now - self._last < self.min_interval:
+        if (self._running is not None and not self._running.done()) or now - self._last < self.gap:
             return False
         self._last = now
+        if reason == "failures":
+            self._unhelpful += 1
         self._running = asyncio.create_task(self.refresh(reason, failed_node), name="redis-slot-refresh")
         return True
 
@@ -102,12 +138,19 @@ class SlotMapRefresher:
             )
         except Exception as exc:  # noqa: BLE001 — keep the old map; the next trigger retries
             metrics.REDIS_SLOT_REFRESHES.labels(reason, "error").inc()
-            log.warning("redis slot map refresh failed (%s): %s", reason, exc)
+            rlog.warning("refresh-error", "redis slot map refresh failed (%s): %s", reason, exc)
             return
         metrics.REDIS_SLOT_REFRESHES.labels(reason, "ok").inc()
         if reason != "periodic":
-            log.info("redis slot map refreshed (%s, failing node %s)", reason, failed_node)
-        self._failures.clear()
+            rlog.info("refresh-ok", "redis slot map refreshed (%s, failing node %s)", reason, failed_node)
+        # Keep the counters of nodes that still own slots: if they keep failing (cluster down,
+        # failover not done yet) every further failure asks again, throttled by `gap`. Forget
+        # nodes the new map no longer routes to (their counters could never be reset).
+        cache = getattr(self.client.nodes_manager, "nodes_cache", None)
+        if isinstance(cache, dict):
+            self._failures = {n: c for n, c in self._failures.items() if n in cache}
+        else:
+            self._failures.clear()
 
     async def _loop(self) -> None:
         while True:
@@ -147,3 +190,70 @@ class FastRedisCluster(RedisCluster):
         await super().initialize(*args, **kwargs)
         self._initialized_once = True
         return self
+
+    async def _execute_command(self, target_node: ClusterNode, *args: Any, **kwargs: Any) -> Any:
+        """One attempt on `target_node`; a MOVED/ASK redirect is followed once. Unlike redis-py's
+        version, no error tears the client down (`aclose()`), sleeps or flags a full re-init: see
+        the module docstring. ClusterDownError, SlotNotCoveredError, TryAgainError, a second
+        redirect, ... are raised to the caller as is."""
+        redirected = False
+        asking = False
+        while True:
+            try:
+                if asking:
+                    await target_node.execute_command("ASKING")
+                return await target_node.execute_command(*args, **kwargs)
+            except (RedisConnectionError, RedisTimeoutError) as e:
+                # what redis-py does per node (cheap, lazy): drop this node's idle connections,
+                # have the busy ones reconnect when released, and ask it last in the next refresh
+                target_node.update_active_connections_for_reconnect()
+                await target_node.disconnect_free_connections()
+                self.nodes_manager.move_node_to_end_of_cached_nodes(target_node.name)
+                e.last_failed_node_name = target_node.name
+                raise
+            except MovedError as e:
+                if redirected:
+                    raise
+                redirected, asking = True, False
+                await self.nodes_manager.move_slot(e)  # patch the slot table in place
+                slot = await self._determine_slot(*args)
+                target_node = self.nodes_manager.get_node_from_slot(slot)
+            except AskError as e:
+                if redirected:
+                    raise
+                redirected, asking = True, True
+                node = self.get_node(node_name=get_node_name(host=e.host, port=e.port))
+                if node is None:
+                    raise
+                target_node = node
+
+
+def build_clients(url: str, mode: str, s: Any) -> tuple[Any, Any, list[SlotMapRefresher]]:
+    """The two Redis clients of the receiver (spec §5.1 step 3, §5.1.1) -> (fast, bg, refreshers).
+
+    - fast (per-click dedup): REDIS_TIMEOUT_MS socket/connect timeout, no retries (the caller fails
+      open); REDIS_TIMEOUT_MS bounds the socket I/O, not the wall-clock incl. loop queueing.
+    - bg (batched hot-ad work): 1 s timeouts, and no client-level retries either: its callers
+      (hot.py) keep the batch / the last known set and retry on their own, with backoff. redis-py's
+      cluster retry would add aclose() + sleep + a full re-init per attempt (see module docstring).
+    In cluster mode both are `FastRedisCluster`s with a `SlotMapRefresher` (start/stop them)."""
+    from sdl_common.redis import RedisSettings, connect
+
+    budget = s.redis_timeout_ms / 1000
+    fast_kwargs = dict(socket_timeout=budget, socket_connect_timeout=budget, retry=Retry(NoBackoff(), 0))
+    bg_kwargs = dict(socket_timeout=1.0, socket_connect_timeout=1.0, retry=Retry(NoBackoff(), 0))
+    if mode != "cluster":
+        rs = RedisSettings(url=url, mode=mode)
+        return connect(rs, **fast_kwargs), connect(rs, **bg_kwargs), []
+    fast = FastRedisCluster.from_url(url, decode_responses=True, **fast_kwargs)
+    bg = FastRedisCluster.from_url(url, decode_responses=True, **bg_kwargs)
+    refreshers = [
+        SlotMapRefresher.for_client(
+            client,
+            threshold=s.redis_slot_refresh_after_failures,
+            min_interval=s.redis_slot_refresh_min_interval_ms / 1000,
+            interval=s.redis_slot_refresh_interval_ms / 1000,
+        )
+        for client in (fast, bg)
+    ]
+    return fast, bg, refreshers

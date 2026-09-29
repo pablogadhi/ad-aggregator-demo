@@ -25,6 +25,11 @@ class Settings(ServiceSettings):
     redis_slot_refresh_after_failures: int = 3
     redis_slot_refresh_min_interval_ms: int = 1000
     redis_slot_refresh_interval_ms: int = 10_000
+    # per-node dedup circuit breaker: after N consecutive failures on a node its keys skip Redis
+    # (fail open) for an exponentially growing window (base .. max), then one click probes it
+    redis_breaker_after_failures: int = 5
+    redis_breaker_open_ms: int = 500
+    redis_breaker_max_open_ms: int = 5000
 
     # warm-up before /readyz turns green (spec §5.1 step 6)
     ad_preload_limit: int = 50_000  # active ads preloaded into the cache (one replica query)
@@ -39,6 +44,7 @@ class Settings(ServiceSettings):
     hot_flush_interval_ms: int = 1000
     hot_refresh_interval_ms: int = 2000
     hot_pending_max_ads: int = 10_000  # bound on un-flushed counters while Redis is down
+    hot_backoff_max_ms: int = 10_000  # cap of the hot loops' exponential backoff while Redis fails
 
     @property
     def receiver_id(self) -> str:

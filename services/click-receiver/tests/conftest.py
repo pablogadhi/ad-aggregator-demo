@@ -7,6 +7,7 @@
 """
 
 import asyncio
+import signal
 
 import fakeredis
 import pytest
@@ -18,6 +19,23 @@ from click_receiver.main import app, get_service
 from click_receiver.service import ClickService
 from click_receiver.settings import Settings
 from click_receiver.store import RedisClickStore
+
+TEST_TIMEOUT_S = 60
+
+
+@pytest.fixture(autouse=True)
+def _test_timeout():
+    """Every test fails after TEST_TIMEOUT_S instead of hanging the suite (the async tests that
+    drive load also carry their own asyncio.timeout)."""
+
+    def expired(signum, frame):
+        raise TimeoutError(f"test exceeded {TEST_TIMEOUT_S} s")
+
+    previous = signal.signal(signal.SIGALRM, expired)
+    signal.alarm(TEST_TIMEOUT_S)
+    yield
+    signal.alarm(0)
+    signal.signal(signal.SIGALRM, previous)
 
 
 class FakeProducer:

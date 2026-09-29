@@ -2,6 +2,11 @@
 
 Nothing here runs on the per-click path except `is_hot()` (a dict lookup) and `record()` (a dict
 increment); the Redis work happens in two background loops.
+
+While Redis fails, both loops back off exponentially (interval, 2x, 4x, ... capped at
+HOT_BACKOFF_MAX_MS) instead of retrying every 1-2 s, and log at most one line per 10 s per kind of
+failure (the metrics count every failure). Counting stays local (bounded backlog) and the last known
+hot set stays in use; the first successful step brings the loop back to its normal interval.
 """
 
 from __future__ import annotations
@@ -15,10 +20,12 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from click_receiver import metrics
+from click_receiver.resilience import Backoff, RateLimitedLog
 from click_receiver.settings import Settings
 from click_receiver.store import ClickStore, HotAd
 
 log = logging.getLogger("click_receiver.hot")
+rlog = RateLimitedLog(log, interval=10.0)
 
 
 class HotTracker:
@@ -58,32 +65,34 @@ class HotTracker:
             else:
                 metrics.HOT_COUNTS_DROPPED.inc(n)
 
-    async def flush(self) -> None:
+    async def flush(self) -> bool:
+        """Returns False when Redis failed (the loop then backs off)."""
         batch, self._pending = self._pending, {}
         if not batch:
-            return
+            return True
         now = self.clock()
         try:
             sums, failed = await self.store.add_counts(batch, int(now // 60))
         except Exception as exc:  # noqa: BLE001 — Redis down: keep counting locally
             metrics.HOT_FLUSH_ERRORS.inc()
-            log.warning("hot counter flush failed (%d ads kept): %s", len(batch), exc)
+            rlog.warning("flush", "hot counter flush failed (%d ads kept): %s", len(batch), exc)
             self._requeue(batch)
-            return
+            return False
         if failed:
             metrics.HOT_FLUSH_ERRORS.inc()
+            rlog.warning("flush-partial", "hot counter flush partly failed (%d ads kept)", len(failed))
             self._requeue({ad: batch[ad] for ad in failed})
         over = sorted(ad for ad, total in sums.items() if total >= self.s.hot_threshold_clicks_10m)
         if not over:
-            return
+            return not failed
         try:
             marked = await self.store.mark(
                 over, now, self.s.hot_mark_ttl_seconds, self.s.hot_permanent_after_marks
             )
         except Exception as exc:  # noqa: BLE001 — retried implicitly by the next flush of the ad
             metrics.HOT_FLUSH_ERRORS.inc()
-            log.warning("hot marking failed: %s", exc)
-            return
+            rlog.warning("mark", "hot marking failed: %s", exc)
+            return False
         until = datetime.fromtimestamp(now + self.s.hot_mark_ttl_seconds, UTC)
         for ad, m in marked.items():
             if m.new:
@@ -92,36 +101,56 @@ class HotTracker:
             # our own marking is visible here at once; the refresher confirms it for everyone
             self._view[ad] = HotAd(ad, m.marks >= self.s.hot_permanent_after_marks, m.marks, until)
         self._update_gauges()
+        return not failed
 
     # -- background: refresh the hot set ---------------------------------------------------
-    async def refresh(self) -> None:
+    async def refresh(self) -> bool:
+        """Returns False when Redis failed (the last known set is kept; the loop backs off)."""
         try:
             view = await self.store.load_hot(self.clock(), self.s.hot_permanent_after_marks)
         except Exception as exc:  # noqa: BLE001 — keep the last known set (hot ads stay salted)
             metrics.HOT_REFRESH_ERRORS.inc()
-            log.warning("hot set refresh failed, keeping %d known ads: %s", len(self._view), exc)
-            return
+            rlog.warning("refresh", "hot set refresh failed, keeping %d known ads: %s", len(self._view), exc)
+            return False
         self._view = view
         self.refreshed_at = datetime.fromtimestamp(self.clock(), UTC)
         self._update_gauges()
+        return True
 
     def _update_gauges(self) -> None:
         metrics.HOT_ADS.set(len(self._view))
         metrics.HOT_ADS_PERMANENT.set(sum(1 for h in self._view.values() if h.permanent))
 
     # -- lifecycle -------------------------------------------------------------------------
-    async def _loop(self, fn, interval_ms: int) -> None:
+    async def _loop(self, name: str, fn, interval_ms: int) -> None:
+        """Run `fn` every interval; after a failure wait interval * 2^n (jittered, capped at
+        HOT_BACKOFF_MAX_MS) instead, back to the interval after the first success."""
+        interval = interval_ms / 1000
+        backoff = Backoff(interval, max(interval, self.s.hot_backoff_max_ms / 1000))
+        delay = interval
         while True:
-            await asyncio.sleep(interval_ms / 1000)
+            metrics.HOT_LOOP_BACKOFF.labels(name).set(delay)
+            await asyncio.sleep(delay)
             try:
-                await fn()
+                ok = await fn()
             except Exception:  # noqa: BLE001 — a background loop must never die
-                log.exception("hot-ad background step failed")
+                rlog.log(logging.ERROR, f"{name}-crash", "hot-ad background step failed", exc_info=True)
+                ok = False
+            if ok is False:
+                backoff.failures = max(backoff.failures, 1)  # first retry after 2x the interval
+                delay = backoff.next()
+            else:
+                backoff.reset()
+                delay = interval
 
     def start(self) -> None:
         self._tasks = [
-            asyncio.create_task(self._loop(self.flush, self.s.hot_flush_interval_ms), name="hot-flush"),
-            asyncio.create_task(self._loop(self.refresh, self.s.hot_refresh_interval_ms), name="hot-refresh"),
+            asyncio.create_task(
+                self._loop("flush", self.flush, self.s.hot_flush_interval_ms), name="hot-flush"
+            ),
+            asyncio.create_task(
+                self._loop("refresh", self.refresh, self.s.hot_refresh_interval_ms), name="hot-refresh"
+            ),
         ]
         # the initial hot set is loaded by the warm-up (warmup.py) before the pod turns ready
 
