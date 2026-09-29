@@ -1,7 +1,11 @@
 # CloudPirates redis values — ha: Redis Cluster, 3 primaries + 3 replicas (MODE=cluster), 2 pods per zone.
 # The chart's post-install/upgrade Job runs `redis-cli --cluster create --cluster-replicas 1` once (it skips a
-# healthy or recovering cluster). Nodes announce their pod FQDN (cluster.announceHostnames), so the cluster
-# re-forms by gossip even after all pods restart with new IPs.
+# healthy or recovering cluster). Nodes announce their pod FQDN (cluster.announceHostnames), but that only
+# steers client MOVED/ASK redirects — the cluster BUS still dials peers by the IP baked into /data/nodes.conf.
+# If every pod restarts at once, all peer IPs in nodes.conf are stale and nothing re-dials by hostname, so the
+# cluster is stuck `cluster_state:fail` (CLUSTERDOWN) even though every pod is Ready. extraInitContainers below
+# (heal-nodesconf, ported from the previous home-grown component's start.sh) rewrites each peer's IP in
+# nodes.conf on every boot by resolving the announced hostname already stored there, before redis-server starts.
 # Trade-off: replica placement is not zone-aware — a primary and its replica may share a zone (smoke.sh warns).
 architecture: cluster
 replicaCount: 6
@@ -18,6 +22,42 @@ cluster:
   config:
     nodeTimeout: 5000        # a replica is promoted ~5–10 s after its primary dies
     requireFullCoverage: false
+
+# heal-nodesconf.sh (below) rewrites peer IPs in /data/nodes.conf before redis-server starts, using the
+# hostname each peer already announced there (cluster.announceHostnames). Runs on every boot; the cluster
+# bus reconnects by IP, so this is what lets the cluster re-form after all 6 pods restart together (e.g.
+# PodChaos kill-all) with fresh IPs. The script lives in its own ConfigMap (heal-nodesconf-configmap.yaml,
+# annotated kustomize.toolkit.fluxcd.io/substitute: disabled) rather than inline here: this values tree is
+# rendered through Flux's postBuild.substitute (INSTANCE/PROFILE), which runs envsubst in strict mode over
+# every dollar-brace token — shell parameter expansions included, even inside comments like this one — and
+# fails the build. Never write a literal dollar-brace in this file (or any values file of a Flux base).
+extraVolumes:
+  - name: heal-nodesconf-script
+    configMap:
+      name: redis-heal-nodesconf
+      defaultMode: 0555
+
+extraInitContainers:
+  # Same pinned image as the redis container (has getent). A pod whose peers aren't resolvable yet (DNS not
+  # published for a still-starting peer) retries briefly then falls back to the old IP rather than blocking boot.
+  - name: heal-nodesconf
+    image: "docker.io/redis:8.10.2@sha256:d5ac52db24d4e70566fe9944f22cf5bdc2bc739b05c0f426335161ea6c23f3b3"
+    imagePullPolicy: IfNotPresent
+    securityContext:
+      runAsUser: 0
+      runAsNonRoot: false
+    env:
+      - name: POD_IP
+        valueFrom: { fieldRef: { fieldPath: status.podIP } }
+    command: ["/bin/sh", "/scripts/heal-nodesconf.sh"]
+    resources:
+      requests: { cpu: 10m, memory: 16Mi }
+      limits: { memory: 32Mi }
+    volumeMounts:
+      - name: data
+        mountPath: /data
+      - name: heal-nodesconf-script
+        mountPath: /scripts
 
 extraConfig: |
   protected-mode no

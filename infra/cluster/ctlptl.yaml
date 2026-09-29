@@ -30,6 +30,18 @@ kindV1Alpha4Cluster:
           hostPort: 8080
           listenAddress: "127.0.0.1"
           protocol: TCP
+      # Default node-monitor-grace-period (50s on v1.37) means a node that goes dark (docker stop on a
+      # worker) isn't marked NotReady, and its pods' endpoints don't drop out of Services, for ~50s —
+      # e.g. losing an Envoy proxy replica's node sends ~10% of gateway traffic into a black hole until
+      # then. Lower it so dead endpoints clear sooner. kubeadm v1beta4 (this cluster's kubeadm API):
+      # ClusterConfiguration.controllerManager.extraArgs is a list of {name, value}, not a map.
+      kubeadmConfigPatches:
+        - |
+          kind: ClusterConfiguration
+          controllerManager:
+            extraArgs:
+              - name: node-monitor-grace-period
+                value: "20s"
     - role: worker
       image: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
       labels:

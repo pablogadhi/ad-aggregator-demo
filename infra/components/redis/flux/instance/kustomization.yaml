@@ -5,6 +5,7 @@ kind: Kustomization
 resources:
   - sources.yaml
   - releases.yaml
+  - heal-nodesconf-configmap.yaml
 configMapGenerator:
   - name: ${INSTANCE}-values
     namespace: flux-system

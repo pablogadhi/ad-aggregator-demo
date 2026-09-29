@@ -1,0 +1,45 @@
+# The heal-nodesconf script (mounted by values/ha.yaml's extraInitContainers) is plain shell using POSIX
+# parameter expansion (${var%pattern} etc). This Kustomization's postBuild.substitute (INSTANCE/PROFILE)
+# would otherwise run envsubst in strict mode over every ${...}-shaped token in the whole manifest set and
+# fail the build on these, so substitution is disabled for this one resource. That also means ${INSTANCE}
+# can't be used in its name below: fine while stack.yaml has a single redis instance, but a second instance
+# of this component in the same namespace would collide on this ConfigMap's name.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-heal-nodesconf
+  namespace: data
+  annotations:
+    kustomize.toolkit.fluxcd.io/substitute: disabled
+data:
+  heal-nodesconf.sh: |
+    #!/bin/sh
+    set -eu
+    NODES=/data/nodes.conf
+    if [ -s "$NODES" ]; then
+      : > /tmp/nodes.new
+      while read -r id addr rest; do
+        if [ "$id" = vars ]; then echo "$id $addr $rest" >> /tmp/nodes.new; continue; fi
+        ipport=${addr%%,*}; tail=${addr#"$ipport"}; host=$(echo "$tail" | cut -d, -f2)
+        oldip=${ipport%%:*}; portpart=${ipport#*:}; newip=""
+        case "$rest" in
+          *myself*) newip=$POD_IP ;;
+          *) if [ -n "$host" ]; then
+               for _ in 1 2 3 4 5 6 7 8 9 10; do
+                 newip=$(getent hosts "$host" | awk '{print $1; exit}' || true)
+                 [ -n "$newip" ] && break
+                 sleep 1
+               done
+             fi ;;
+        esac
+        [ -n "$newip" ] || newip=$oldip
+        [ "$newip" = "$oldip" ] || echo "nodes.conf: $host $oldip -> $newip"
+        echo "$id $newip:$portpart$tail $rest" >> /tmp/nodes.new
+      done < "$NODES"
+      mv /tmp/nodes.new "$NODES"
+    fi
+    # Runs as root (see the heal-nodesconf initContainer's securityContext in values/ha.yaml) so it can
+    # rewrite nodes.conf regardless of who owns it; hand /data back to the redis user (uid/gid 999, the
+    # chart's containerSecurityContext.runAsUser / podSecurityContext.fsGroup) or the redis container fails
+    # to lock its own data directory on the next start.
+    chown -R 999:999 /data
