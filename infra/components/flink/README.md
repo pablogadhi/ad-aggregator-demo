@@ -8,7 +8,7 @@ The **Apache Flink Kubernetes Operator 1.16.1** (helm chart 1.16.1 from
 secrets. The chart creates the job service account **`flink`** (+ Role) in `apps`. The admission
 webhook uses a cert-manager certificate (the platform installs cert-manager). The operator chart
 provides no metrics PodMonitors, `flink-rest` Service or conn secret, so those are plain YAML in
-`flux/small/glue.yaml` (Kustomization `flink`, after Kustomization `flink-operator` = `flux/operator/`:
+`flux/small/{monitoring,conn}.yaml` (Kustomization `flink`, after Kustomization `flink-operator` = `flux/operator/`:
 HelmRepository + HelmRelease `flink-operator`, values `values/operator.yaml`).
 
 One instance per design, named `flink`, profile `small` only (`flux/single-instance`, `flux/small/`).

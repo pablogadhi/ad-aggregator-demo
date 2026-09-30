@@ -7,7 +7,7 @@ Release `aws` (namespace `data`), `fullnameOverride: aws` so the Deployment/Serv
 `aws` (endpoint unchanged: `http://aws.data.svc.cluster.local:4566`). `floci.storage.mode:
 persistent` + a 5Gi PVC (every write flushed to disk, buckets/objects survive pod restarts). 100m /
 256Mi request, 1Gi limit. `apps/aws-conn` is plain YAML in the Flux base
-(`flux/instance/glue.yaml`) — the chart itself has no `extraObjects`, and nothing is generated.
+(`flux/instance/conn.yaml`) — the chart itself has no `extraObjects`, and nothing is generated.
 Flux base `flux/instance/` → Kustomization `aws`: `OCIRepository floci`, HelmRelease `aws` (Helm drift
 detection on), ConfigMap `aws-values`.
 

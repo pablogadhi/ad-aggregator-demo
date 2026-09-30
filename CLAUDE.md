@@ -28,7 +28,7 @@ To build a design from a diagram, run the **`/build-design`** skill (`.claude/sk
 | `design/`                           | diagram (input), `spec.md`, `contracts/` (openapi, events, db, config.md), `RESULTS.md` | architect (orchestrator)            |
 | `stack.yaml`                        | which components / services / pipelines / client this design runs                       | architect                           |
 | `infra/cluster/`                    | kind cluster (1 control plane + 4 workers, zones a/b/c) + local registry                | template                            |
-| `infra/flux/`                       | Flux bootstrap (operator + `FluxInstance`), root `clusters/sdl/`, platform HelmReleases + glue | template                            |
+| `infra/flux/`                       | Flux bootstrap (operator + `FluxInstance`), root `clusters/sdl/`, platform HelmReleases + configs | template                            |
 | `infra/platform/values/`            | values for Envoy Gateway, cert-manager, metrics-server, Prometheus/Grafana, Chaos Mesh  | template                            |
 | `infra/components/<name>/`          | reusable backing infra (postgres, kafka, …) — `AUTHORING.md`, `PLAYBOOK.md`             | infra-builder                       |
 | `infra/design/`                     | design-specific infra: topics, buckets, extra DBs, gateway policies                     | infra-builder                       |

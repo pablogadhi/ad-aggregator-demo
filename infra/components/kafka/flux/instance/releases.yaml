@@ -1,4 +1,4 @@
-# kafbat kafka-ui at http://kafka-ui.localhost:8080 (HTTPRoute in glue.yaml). Helm drift detection is
+# kafbat kafka-ui at http://kafka-ui.localhost:8080 (HTTPRoute in route.yaml). Helm drift detection is
 # on: delete or edit its Deployment and helm-controller puts it back on the next reconcile.
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease

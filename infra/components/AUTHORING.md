@@ -21,7 +21,8 @@ infra/components/<name>/
 │   ├── instance/            # once per stack.yaml entry → Kustomization <instance>
 │   │   ├── kustomization.yaml   #   configMapGenerator ${INSTANCE}-values from ../../values/*.yaml
 │   │   ├── releases.yaml        #   HelmRelease(s), named/configured with ${INSTANCE} and ${PROFILE}
-│   │   └── glue.yaml            #   plain YAML: static conn secret, CRs, PodMonitors, HTTPRoutes
+│   │   └── conn.yaml, …         #   plain YAML named by content: conn.yaml (static conn secret),
+│   │                            #   monitoring.yaml (PodMonitors), route.yaml (HTTPRoutes), CRs
 │   ├── <profile>/           # (optional) overlay used instead of instance/ when profiles differ in plain
 │   │                        #   YAML (kafka: Kafka + KafkaNodePool per profile on top of ../instance)
 │   └── single-instance      # (optional) marker: stack.py validate rejects instance != <name>
@@ -35,7 +36,7 @@ infra/components/<name>/
 ```
 
 `scripts/stack.py flux` turns `stack.yaml` into `infra/flux/clusters/sdl/stack.generated.yaml`
-(gitignored, regenerated on every push): `platform → platform-glue → <name>-operator → <instance> → design`,
+(gitignored, regenerated on every push): `platform → platform-configs → <name>-operator → <instance> → design`,
 each a Flux `Kustomization` with `dependsOn`, `wait: true` and, per instance,
 `postBuild.substitute: {INSTANCE, PROFILE}`. Path: `flux/<profile>/` if it exists, else `flux/instance/`.
 A profile is valid if `flux/<profile>/` or `values/<profile>.yaml` exists. Removing an entry from
@@ -65,8 +66,10 @@ Name: lower-kebab, the technology (`kafka`, `redis`, `elasticsearch`, `flink`, `
 5. **Install from existing charts on Artifact Hub.** Prefer the upstream project's own chart/operator,
    then a maintained community chart that runs official images; write chart code only when Artifact Hub
    has nothing suitable. Anything no chart provides (the conn secret, CRs such as `Kafka`, routes) is
-   **plain YAML** in the base. A **`bedag/raw`** HelmRelease (`<instance>-glue`, `values/glue.yaml`,
-   shared `HelmRepository bedag`) only when a value must be **generated and kept** — its `templates:` run
+   **plain YAML** in the base, in files named by what they hold (`conn.yaml`, `monitoring.yaml`,
+   `route.yaml`), applied by the kustomize-controller. **"Glue" means only** a **`bedag/raw`**
+   HelmRelease (`<instance>-glue`, `values/glue.yaml`, shared `HelmRepository bedag`), used only when a
+   value must be **generated and kept** — its `templates:` run
    through `tpl` in a real `helm upgrade`, so `lookup`, `randAlphaNum`, `genPrivateKey` work (this is
    why the lab uses Flux, not Argo CD). **No Bitnami** charts/images.
 6. **Readiness:** `make up` waits until every Kustomization and HelmRelease is Ready, so readiness must be

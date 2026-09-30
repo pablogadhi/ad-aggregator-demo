@@ -9,7 +9,7 @@ and the `kafka-ui` HTTPRoute are **plain YAML** in the Flux base (nothing is gen
 
 - `flux/operator/` → Kustomization `kafka-operator`: HelmRepositories `strimzi`, `kafbat`; HelmRelease
   `strimzi` (values `values/operator.yaml`). Its CRDs exist before the cluster CRs are applied.
-- `flux/instance/` (shared): `glue.yaml` (metrics ConfigMap, PodMonitor, `apps/kafka-conn`, HTTPRoute) +
+- `flux/instance/` (shared): `monitoring.yaml` (metrics ConfigMap, PodMonitor), `conn.yaml` (`apps/kafka-conn`), `route.yaml` (HTTPRoute) +
   HelmRelease `kafka-ui` (values `values/kafka-ui.yaml`, Helm drift detection on).
 - `flux/small/`, `flux/ha/` → Kustomization `kafka` (stack.py picks the profile's directory): the shared
   instance + that profile's `kafka.yaml` (`Kafka` + `KafkaNodePool`). Ready only once Strimzi reports the
@@ -70,7 +70,7 @@ spec: { partitions: 12, replicas: 3, config: { min.insync.replicas: 2, retention
 
 ## kafka-ui
 
-`kafka-ui.localhost:8080` (through the gateway, HTTPRoute in `flux/instance/glue.yaml`). Points at
+`kafka-ui.localhost:8080` (through the gateway, HTTPRoute in `flux/instance/route.yaml`). Points at
 `kafka-kafka-bootstrap.data.svc.cluster.local:9092` (`auth: disabled` — no login, lab only).
 Drift demo: `kubectl -n data delete deploy kafka-ui` — helm-controller's drift detection recreates it on
 the next HelmRelease reconcile (≤ 5 min, or `scripts/flux.sh reconcile helmrelease kafka-ui`).

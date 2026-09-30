@@ -1,0 +1,7 @@
+# Platform configs: plain YAML that needs the platform charts' CRDs (Kustomization platform-configs,
+# dependsOn platform), applied by the kustomize-controller. Formerly the bedag/raw release platform-glue.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - gateway.yaml
+  - routes.yaml

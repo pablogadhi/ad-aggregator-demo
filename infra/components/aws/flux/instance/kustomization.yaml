@@ -5,7 +5,7 @@ kind: Kustomization
 resources:
   - sources.yaml
   - releases.yaml
-  - glue.yaml
+  - conn.yaml
 configMapGenerator:
   - name: aws-values
     namespace: flux-system

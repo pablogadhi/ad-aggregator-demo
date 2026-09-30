@@ -1,0 +1,11 @@
+# Connection contract: Secret kafka-conn in namespace apps (plain listener, no auth inside the cluster)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kafka-conn
+  namespace: apps
+  labels:
+    sdl.dev/conn: "true"
+type: Opaque
+stringData:
+  BOOTSTRAP_SERVERS: kafka-kafka-bootstrap.data.svc.cluster.local:9092

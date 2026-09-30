@@ -2,7 +2,7 @@
 # `make up` installs with helm directly. Everything else is reconciled by the FluxInstance it runs.
 #
 # Web UI (Flux Status, port 9080) at http://flux.localhost:8080 via the HTTPRoute in
-# infra/flux/platform/glue/routes.yaml. Lab auth: Anonymous — every visitor is user "lab" in group
+# infra/flux/platform/configs/routes.yaml. Lab auth: Anonymous — every visitor is user "lab" in group
 # "sdl-lab", bound to the chart's flux-web-admin ClusterRole (flux-instance.yaml), so the UI can also
 # reconcile/suspend/resume. Never do this outside a local lab.
 web:

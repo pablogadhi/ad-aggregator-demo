@@ -47,7 +47,7 @@ JWKS (derived from this private key), so the two can't drift.
   otherwise re-include an ejected pod once ≥50% of a small replica set is unhealthy). Ejects dead
   backends from Envoy's own observed failures, independent of how fast xDS/endpoint updates land
   — see the platform-level controller HA in `infra/platform/values/envoy-gateway.yaml` and
-  `infra/flux/platform/glue/gateway.yaml` (EnvoyProxy `sdl-proxy`, 2 replicas zone-spread) for the other half
+  `infra/flux/platform/configs/gateway.yaml` (EnvoyProxy `sdl-proxy`, 2 replicas zone-spread) for the other half
   of the zone-loss fix (chaos #7).
 
 Behaviour verified on the cluster with throwaway routes named `ad-placement` / `click-receiver`

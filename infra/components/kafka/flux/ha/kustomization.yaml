@@ -1,5 +1,5 @@
 # Profile ha (Kustomization kafka, path chosen by scripts/stack.py because this directory exists):
-# the shared instance glue + this profile's Kafka + KafkaNodePool.
+# the shared instance base (monitoring, conn, route) + this profile's Kafka + KafkaNodePool.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:

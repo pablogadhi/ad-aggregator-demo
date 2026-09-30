@@ -1,7 +1,0 @@
-# Platform glue: plain YAML that needs the platform charts' CRDs (Kustomization platform-glue,
-# dependsOn platform). Formerly the bedag/raw release platform-glue (infra/platform/values/glue.yaml).
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-resources:
-  - gateway.yaml
-  - routes.yaml

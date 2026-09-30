@@ -1,4 +1,4 @@
-# Once per design (Kustomization kafka-operator, dependsOn platform-glue): Strimzi (watches ns data)
+# Once per design (Kustomization kafka-operator, dependsOn platform-configs): Strimzi (watches ns data)
 # and the chart repos. Its CRDs must exist before Kustomization kafka applies the Kafka CRs.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization

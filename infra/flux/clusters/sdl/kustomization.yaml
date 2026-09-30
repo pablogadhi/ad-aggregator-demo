@@ -1,5 +1,5 @@
 # Root of the lab, synced by the FluxInstance (Kustomization flux-system/flux-system):
-#   platform -> platform-glue -> <component>-operator -> <instance> (one per stack.yaml entry) -> design
+#   platform -> platform-configs -> <component>-operator -> <instance> (one per stack.yaml entry) -> design
 # stack.generated.yaml is written by `scripts/stack.py flux` on every push (make up / make sync); gitignored.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
