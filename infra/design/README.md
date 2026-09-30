@@ -26,7 +26,7 @@ create-buckets` — Flux recreates it within 2 min.
 
 Generated on the first install, then **kept** on every upgrade (`lookup` of the existing secret), so
 `KID` never changes across `make up` re-runs. To rotate: `kubectl -n apps delete secret jwt-conn &&
-scripts/flux.sh reconcile helmrelease jwt-conn --force`, then restart `auth`. The gateway no longer needs a copy of the public key: it fetches `auth`'s
+scripts/flux.sh reconcile helmrelease jwt-conn --force`, then restart `auth`. The gateway doesn't need a copy of the public key: it fetches `auth`'s
 JWKS (derived from this private key), so the two can't drift.
 
 ## Gateway policies (namespace `apps`)

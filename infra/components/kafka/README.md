@@ -5,7 +5,7 @@ Apache Kafka **4.3.1** managed by the Strimzi operator (**chart/operator 1.2.0**
 `KafkaNodePool` (`dual-role`) whose nodes are both controllers and brokers. Operator in
 `strimzi-system` (watches `data`), cluster `kafka` in `data`. No maintained chart deploys a Strimzi
 cluster, so the `Kafka`/`KafkaNodePool` CRs, the JMX metrics ConfigMap, the PodMonitor, `kafka-conn`
-and the `kafka-ui` HTTPRoute are **plain YAML** in the Flux base (nothing is generated, so no `bedag/raw`):
+and the `kafka-ui` HTTPRoute are **plain YAML** in the Flux base:
 
 - `flux/operator/` → Kustomization `kafka-operator`: HelmRepositories `strimzi`, `kafbat`; HelmRelease
   `strimzi` (values `values/operator.yaml`). Its CRDs exist before the cluster CRs are applied.

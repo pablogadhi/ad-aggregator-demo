@@ -1,5 +1,5 @@
-# Chart sources for the platform. `bedag` is shared: components and the design use it for the only
-# templated glue left (lookup-generated credentials).
+# Chart sources for the platform. `bedag` is shared: components and the design use it for
+# lookup-generated credentials (bedag/raw releases).
 apiVersion: source.toolkit.fluxcd.io/v1
 kind: OCIRepository
 metadata:
