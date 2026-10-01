@@ -72,6 +72,7 @@ class Flux(unittest.TestCase):
     def test_validate_profile_and_single_instance(self):
         self.assertIn("no profile 'huge'", run("components: [{name: redis, profile: huge}]\n", "validate", "components").stderr)
         self.assertIn("one instance only", run("components: [{name: kafka, instance: k2}]\n", "validate", "components").stderr)
+        self.assertEqual(run("components: [{name: flink, profile: small}]\n", "validate", "components").returncode, 0)
         self.assertEqual(run("components: [{name: redis, instance: cache, profile: ha}]\n", "validate", "components").returncode, 0)
 
 

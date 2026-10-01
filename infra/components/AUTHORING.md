@@ -39,7 +39,8 @@ infra/components/<name>/
 (gitignored, regenerated on every push): `platform → platform-configs → <name>-operator → <instance> → design`,
 each a Flux `Kustomization` with `dependsOn`, `wait: true` and, per instance,
 `postBuild.substitute: {INSTANCE, PROFILE}`. Path: `flux/<profile>/` if it exists, else `flux/instance/`.
-A profile is valid if `flux/<profile>/` or `values/<profile>.yaml` exists. Removing an entry from
+A profile is valid if `flux/<profile>/` or `values/<profile>.yaml` exists, or it is the default (`small`):
+a component with one profile (flink) ships only `flux/instance/`. Removing an entry from
 `stack.yaml` + `make sync` prunes its Kustomization, which uninstalls its releases.
 
 Name: lower-kebab, the technology (`kafka`, `redis`, `elasticsearch`, `flink`, `temporal`, `aws`).

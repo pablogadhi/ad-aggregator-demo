@@ -134,7 +134,8 @@ def main(argv: list[str]) -> int:
             if not (d / "flux").is_dir():
                 errors.append(f"component '{c['name']}' has no infra/components/{c['name']}/flux/")
                 continue
-            if not ((d / "flux" / c["profile"]).is_dir() or (d / "values" / f"{c['profile']}.yaml").is_file()):
+            # the default profile is always valid: a component with a single profile ships only flux/instance/
+            if c["profile"] != "small" and not ((d / "flux" / c["profile"]).is_dir() or (d / "values" / f"{c['profile']}.yaml").is_file()):
                 errors.append(f"component '{c['name']}' has no profile '{c['profile']}'"
                               f" (flux/{c['profile']}/ or values/{c['profile']}.yaml)")
             if not instance_path(c).is_dir():

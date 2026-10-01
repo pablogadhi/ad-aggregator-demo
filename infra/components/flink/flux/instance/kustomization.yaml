@@ -1,4 +1,4 @@
-# Kustomization flink (profile small, the only one): what the operator chart doesn't provide.
+# Kustomization flink (one profile, so only flux/instance/): what the operator chart doesn't provide.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
