@@ -4,34 +4,16 @@ An ad click aggregator built end to end on a local multi-zone Kubernetes cluster
 redirected in milliseconds, counted exactly once per minute by a Flink pipeline, and queryable by
 advertisers. Then it's broken on purpose (zone loss, broker/DB/Redis kills, drift) to show it holds.
 
-```
-browser ──302── click-receiver ×4–18 ──acks=all──▶ Kafka `clicks` (12 part, RF3) ──▶ Flink click-aggregator (3–12)
-   │              │  dedup + hot-ad state                                               │ two-stage count, S3 checkpoints
-   │              └──▶ Redis Cluster 3+3                                               ▼
-   │                                                              analytics-db (CNPG ×3) ◀── analytics ×2
-   └── Envoy Gateway ×3 (JWT on ad-placement/analytics) ── auth ×2, ad-placement ×2 ──▶ postgres (CNPG ×3)
-```
+[![Ad Click Aggregator: high-level design](design/architecture.png)](design/diagram.png)
+
+*The design as drawn (click for the full board with requirements). What was built, with replica
+counts: [`design/RESULTS.md`](design/RESULTS.md#what-was-built).*
 
 - **Stack:** kind (5 nodes, 3 zones) · Flux (GitOps from an OCI artifact) · every component from
   pinned Artifact Hub charts: CloudNativePG, Strimzi Kafka, Redis Cluster, Flink operator, Floci (S3)
   · Envoy Gateway · FastAPI services · Next.js client · k6-operator · Chaos Mesh · Prometheus/Grafana.
 - **Click path:** ad lookup (cache → read replica → primary) → dedup in Redis (fails open) → salted
   key for hot ads → Kafka `acks=all`, waiting for the ack (1 s deadline, load shedding) → 302.
-
-## Results (highlights)
-
-| Check | Result |
-| ----- | ------ |
-| Acceptance flows | e2e **27/27** through the gateway |
-| Load, 500 rps + 1,000 rps burst (in-cluster k6, 3 zones) | p95 **11.9 ms** steady / **16.9 ms** burst, 0 % errors, counts reconcile **exactly** |
-| Zone-b node down | **99.976 %** of clicks OK, ~15 s error window, lost = 0 |
-| All 6 Redis pods killed under load | **0 click errors**, cluster re-forms by itself |
-| Kafka broker / Flink TaskManager / DB primary kills | ≤ 0.01 % errors, lost = 0 |
-| Drift (delete a Flux-managed Secret + Deployment) | restored by Flux within seconds |
-
-Full numbers, findings and trade-offs: [`design/RESULTS.md`](design/RESULTS.md). Spec and contracts:
-[`design/spec.md`](design/spec.md), [`design/contracts/`](design/contracts/); original diagram:
-[`design/diagram.excalidraw`](design/diagram.excalidraw).
 
 ## Run it
 
@@ -51,6 +33,21 @@ Grafana `grafana.localhost:8080` (admin/admin) · Prometheus `prometheus.localho
 Tools you need (the lab never installs them): docker, kind, kubectl, helm, ctlptl, tilt, uv, node,
 pnpm, python3. To use kubectl/helm against the lab from your shell: `source scripts/env.sh`
 (kubeconfig and helm state live in the repo, your `~/.kube/config` is untouched).
+
+## Results (highlights)
+
+| Check | Result |
+| ----- | ------ |
+| Acceptance flows | e2e **27/27** through the gateway |
+| Load, 500 rps + 1,000 rps burst (in-cluster k6, 3 zones) | p95 **11.9 ms** steady / **16.9 ms** burst, 0 % errors, counts reconcile **exactly** |
+| Zone-b node down | **99.976 %** of clicks OK, ~15 s error window, lost = 0 |
+| All 6 Redis pods killed under load | **0 click errors**, cluster re-forms by itself |
+| Kafka broker / Flink TaskManager / DB primary kills | ≤ 0.01 % errors, lost = 0 |
+| Drift (delete a Flux-managed Secret + Deployment) | restored by Flux within seconds |
+
+Full numbers, findings and trade-offs: [`design/RESULTS.md`](design/RESULTS.md). Spec and contracts:
+[`design/spec.md`](design/spec.md), [`design/contracts/`](design/contracts/); Excalidraw source of
+the diagram: [`design/diagram.excalidraw`](design/diagram.excalidraw).
 
 Built on [system-design-lab](https://github.com/pablogadhi/system-design-lab); the rest of this
 README describes that lab.
